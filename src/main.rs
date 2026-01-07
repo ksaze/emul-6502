@@ -1,7 +1,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
 
-use crate::{bus::MemoryBus, variants::Nmos6502};
+use crate::{bus::MemoryBus, variants::NMOS_6502};
 
 mod bus;
 mod cpu;
@@ -11,7 +11,7 @@ mod shared;
 mod variants;
 
 fn main() {
-    let mut emul = emulator::Emulator::new(Nmos6502::new(), MemoryBus::new());
+    let mut emul = emulator::Emulator::new(NMOS_6502, MemoryBus::new());
     emul.reset_cpu();
     println!("Cycles: {}", emul.cycles);
     println!("Execution completed.");

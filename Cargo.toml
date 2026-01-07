@@ -12,3 +12,4 @@ name = "emu6502"
 path = "src/main.rs"
 
 [dependencies]
+bitflags = "2.9.3"

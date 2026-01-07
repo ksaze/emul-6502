@@ -1,7 +1,7 @@
 use crate::bus::Bus;
-use crate::operations::{Instruction, RESET, StepCtl};
+use crate::operations::{Instruction, MicroOp, NONE, RESET, StepCtl};
 use crate::shared::{Byte, UNUSED_BIT_POS, Word};
-use crate::variants::Variant;
+use crate::variants::Decoder;
 
 pub struct StackPointer(pub Byte);
 
@@ -37,7 +37,9 @@ pub struct CPUCore {
     pub crossed: bool,
 
     pub instr: Instruction,
-    pub step: usize,
+    pub micro_iter: Option<
+        std::iter::Chain<std::slice::Iter<'static, MicroOp>, std::slice::Iter<'static, MicroOp>>,
+    >,
     pub ready: bool,
 }
 
@@ -47,20 +49,20 @@ impl CPUCore {
     }
 
     pub fn clear_flag_bit(&mut self, pos: u8) {
-        self.flags &= 1 << pos;
+        self.flags &= !(1 << pos);
     }
 }
 
 #[allow(clippy::upper_case_acronyms)]
-pub struct CPU<V>
-where
-    V: Variant,
+pub struct CPU<V: Decoder>
+// where
+//    V: Decoder,
 {
     pub core: CPUCore,
-    pub instr_table: V,
+    pub decoder: V,
 }
 
-impl<V: Variant> CPU<V> {
+impl<V: Decoder> CPU<V> {
     pub fn new(variant: V) -> Self {
         CPU {
             core: CPUCore {
@@ -77,45 +79,78 @@ impl<V: Variant> CPU<V> {
                 eff: 0,
                 crossed: false,
 
-                instr: Instruction::empty(),
-                step: 0,
+                instr: Instruction::default(),
+                micro_iter: None,
                 ready: true,
             },
 
-            instr_table: variant,
+            decoder: variant,
         }
     }
 
     pub fn reset(&mut self) {
-        self.core.instr = Instruction::prepend_with_null(&RESET);
-        self.core.step = 0;
+        self.core.instr = Instruction::new(&NONE, &RESET);
+        self.core.micro_iter = Some(self.core.instr.pipeline());
         self.core.ready = false;
     }
 
     pub fn tick(&mut self, bus: &mut dyn Bus) {
+        // --- Fetch & Decode Opcode Phase
         if self.core.ready {
             let opcode = bus.read(self.core.pc);
             self.core.pc = self.core.pc.wrapping_add(1);
             self.core.ir = opcode;
-            self.core.instr = self.instr_table.decode(opcode);
-            self.core.step = 0;
+
+            let instr = self.decoder.decode(opcode).unwrap_or_else(|| {
+                panic!(
+                    "Decode failed for opcode: ${:02X} at PC=${:04X}",
+                    opcode,
+                    self.core.pc.wrapping_sub(1)
+                )
+            });
+
+            self.core.instr = instr;
+            self.core.micro_iter = Some(self.core.instr.pipeline());
             self.core.ready = false;
             return;
         }
 
-        if let Some(&micro_op) = self.core.instr.pipeline.next() {
-            match micro_op(&mut self.core, bus) {
-                StepCtl::Next => {}
-                StepCtl::End => {
+        // --- Execute Micro-op Phase
+
+        // Fetch micro-op
+        let micro = {
+            let iter = match &mut self.core.micro_iter {
+                Some(it) => it,
+                None => {
                     self.core.ready = true;
+                    return;
                 }
-                StepCtl::Skip => {
-                    // Skip the penalty cycle
-                    let _ignore = self.core.instr.pipeline.next();
+            };
+
+            iter.next()
+        };
+
+        // If end of iterator, skip to next instruction
+        let Some(micro) = micro else {
+            self.core.ready = true;
+            self.core.micro_iter = None;
+            return;
+        };
+
+        // Execute micro-op
+        match micro(&mut self.core, bus) {
+            StepCtl::Next => {}
+
+            StepCtl::End => {
+                self.core.ready = true;
+                self.core.micro_iter = None;
+            }
+
+            StepCtl::Skip => {
+                if let Some(iter) = &mut self.core.micro_iter {
+                    iter.next(); // skip fake stall micro-op
                 }
             }
-        } else {
-            panic!("Instruction sequence ended without StepCtl::End");
         }
     }
 }

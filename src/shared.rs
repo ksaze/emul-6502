@@ -1,6 +1,8 @@
 pub type Word = u16;
 pub type Byte = u8;
 
+pub const MAX_INSTR_LEN: usize = 9;
+
 pub const CARRY_FLAG_POS: u8 = 0;
 pub const ZERO_FLAG_POS: u8 = 1;
 pub const IRQ_DISABLE_FLAG_POS: u8 = 2;

@@ -1,10 +1,10 @@
 use crate::bus::Bus;
 use crate::cpu::CPU;
-use crate::variants::Variant;
+use crate::variants::Decoder;
 
 pub struct Emulator<V, B>
 where
-    V: Variant,
+    V: Decoder,
     B: Bus,
 {
     pub cpu: CPU<V>,
@@ -12,7 +12,7 @@ where
     pub cycles: u8,
 }
 
-impl<V: Variant, B: Bus> Emulator<V, B> {
+impl<V: Decoder, B: Bus> Emulator<V, B> {
     pub fn new(variant: V, bus: B) -> Emulator<V, B> {
         Self {
             cpu: CPU::new(variant),
