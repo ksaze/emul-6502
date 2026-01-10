@@ -4,17 +4,17 @@ use crate::shared::Byte;
 
 #[inline]
 fn aaa(op: u8) -> u8 {
-    op & 0b111
+    (op & 0xE0) >> 5
 }
 
 #[inline]
 fn bbb(op: u8) -> u8 {
-    (op >> 3) & 0b111
+    (op & 0x1C) >> 2
 }
 
 #[inline]
 fn cc(op: u8) -> u8 {
-    (op >> 6) & 0b11
+    op & 0x03
 }
 
 pub trait Decoder {
@@ -48,40 +48,43 @@ impl Decoder for Variant {
     }
 }
 
-// #[inline]
-// fn is_alu(op: Byte) -> bool {
-//     cc(op) == 0b01
-// }
-//
-// fn decode_alu(op: Byte) -> Option<Instruction> {
-//     let addr = match aaa(op) {
-//         0 => &IDX_IND,
-//         1 => &ZP,
-//         2 => &IMM,
-//         3 => &ABS,
-//         4 => &IND_IDX,
-//         5 => &ZP_X,
-//         6 => &ABS_Y,
-//         7 => &ABS_X,
-//         _ => return None,
-//     };
-//
-//     let opn = match bbb(op) {
-//         0 => &ORA,
-//         1 => &AND,
-//         2 => &EOR,
-//         3 => &ADC,
-//         4 => &STA,
-//         5 => &LDA,
-//         6 => &CMP,
-//         7 => &SBC,
-//         _ => return None,
-//     };
-//
-//     Some(Instruction::new(addr, opn))
-// }
+#[inline]
+fn is_gr1(op: Byte) -> bool {
+    cc(op) == 0b01
+}
+
+fn decode_gr1(op: Byte) -> Option<Instruction> {
+    let addr = match bbb(op) {
+        0 => &IDX_IND,
+        1 => &ZERO_PAGE,
+        2 => &IMMEDIATE,
+        3 => &ABSOLUTE,
+        4 => &IND_IDX,
+        5 => &ZERO_PAGE_X,
+        6 => &ABSOLUTE_Y,
+        7 => &ABSOLUTE_X,
+        _ => return None,
+    };
+
+    let opn = match aaa(op) {
+        0 => &ORA,
+        1 => &AND,
+        2 => &EOR,
+        3 => &ADC,
+        4 => &STA,
+        5 => &LDA,
+        6 => &CMP,
+        7 => &SBC,
+        _ => return None,
+    };
+
+    Some(Instruction::new(addr, opn))
+}
 
 pub static NMOS_6502: Variant = Variant {
-    rules: &[],
+    rules: &[DecodeRule {
+        matches: is_gr1,
+        decode: decode_gr1,
+    }],
     parent: None,
 };

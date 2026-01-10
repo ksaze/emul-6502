@@ -1,6 +1,7 @@
 # 6502 Emulator in Rust
 
 ## References
+- MCS 6500 Microcomputer Family Programming Manual
 - https://llx.com/Neil/a2/opcodes.html
 - https://6502.co.uk/course/build-a-6502-based-computer
 - https://www.ahl27.com/posts/2023/01/6502-emu1/

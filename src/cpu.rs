@@ -1,7 +1,9 @@
 use crate::bus::Bus;
 use crate::operations::{Instruction, MicroOp, NONE, RESET, StepCtl};
-use crate::shared::{Byte, UNUSED_BIT_POS, Word};
+use crate::shared::{Byte, Word};
 use crate::variants::Decoder;
+
+use bitflags::bitflags;
 
 pub struct StackPointer(pub Byte);
 
@@ -21,19 +23,32 @@ impl StackPointer {
     }
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Status: u8 {
+        const CARRY     = 0b0000_0001; // C
+        const ZERO      = 0b0000_0010; // Z
+        const IRQ_DISABLE = 0b0000_0100; // I
+        const DECIMAL   = 0b0000_1000; // D
+        const BREAK    = 0b0001_0000; // B
+        const UNUSED   = 0b0010_0000; // always set on 6502
+        const OVERFLOW = 0b0100_0000; // V
+        const NEGATIVE = 0b1000_0000; // N
+    }
+}
+
 pub struct CPUCore {
     pub pc: Word,
     pub sp: StackPointer,
 
-    a: Byte,
-    x: Byte,
-    y: Byte,
-    pub flags: Byte,
+    pub a: Byte,
+    pub x: Byte,
+    pub y: Byte,
+    pub flags: Status,
 
     pub ir: Byte,
     pub tmp8: Byte,
     pub tmp16: Word,
-    pub eff: Word,
     pub crossed: bool,
 
     pub instr: Instruction,
@@ -44,20 +59,25 @@ pub struct CPUCore {
 }
 
 impl CPUCore {
-    pub fn set_flag_bit(&mut self, pos: u8) {
-        self.flags |= 1 << pos;
+    pub fn update_flag(&mut self, flag: Status, val: bool) {
+        self.flags = if val {
+            self.flags | flag
+        } else {
+            self.flags & !flag
+        };
     }
 
-    pub fn clear_flag_bit(&mut self, pos: u8) {
-        self.flags &= !(1 << pos);
+    pub fn set_flag(&mut self, flag: Status) {
+        self.flags |= flag;
+    }
+
+    pub fn clear_flag(&mut self, flag: Status) {
+        self.flags &= !flag;
     }
 }
 
 #[allow(clippy::upper_case_acronyms)]
-pub struct CPU<V: Decoder>
-// where
-//    V: Decoder,
-{
+pub struct CPU<V: Decoder> {
     pub core: CPUCore,
     pub decoder: V,
 }
@@ -71,12 +91,11 @@ impl<V: Decoder> CPU<V> {
                 a: 0,
                 x: 0,
                 y: 0,
-                flags: (1 << UNUSED_BIT_POS),
+                flags: Status::UNUSED,
 
                 ir: 0,
                 tmp8: 0,
                 tmp16: 0,
-                eff: 0,
                 crossed: false,
 
                 instr: Instruction::default(),
@@ -95,6 +114,10 @@ impl<V: Decoder> CPU<V> {
     }
 
     pub fn tick(&mut self, bus: &mut dyn Bus) {
+        if !bus.rdy() {
+            return;
+        }
+
         // --- Fetch & Decode Opcode Phase
         if self.core.ready {
             let opcode = bus.read(self.core.pc);
@@ -116,39 +139,55 @@ impl<V: Decoder> CPU<V> {
         }
 
         // --- Execute Micro-op Phase
+        loop {
+            // Fetch micro-op
+            let micro = {
+                let iter = match &mut self.core.micro_iter {
+                    Some(it) => it,
+                    None => {
+                        self.core.ready = true;
+                        return;
+                    }
+                };
 
-        // Fetch micro-op
-        let micro = {
-            let iter = match &mut self.core.micro_iter {
-                Some(it) => it,
-                None => {
-                    self.core.ready = true;
-                    return;
-                }
+                iter.next()
             };
 
-            iter.next()
-        };
-
-        // If end of iterator, skip to next instruction
-        let Some(micro) = micro else {
-            self.core.ready = true;
-            self.core.micro_iter = None;
-            return;
-        };
-
-        // Execute micro-op
-        match micro(&mut self.core, bus) {
-            StepCtl::Next => {}
-
-            StepCtl::End => {
+            // If end of iterator, skip to next instruction
+            let Some(micro) = micro else {
                 self.core.ready = true;
                 self.core.micro_iter = None;
-            }
+                return;
+            };
 
-            StepCtl::Skip => {
-                if let Some(iter) = &mut self.core.micro_iter {
-                    iter.next(); // skip fake stall micro-op
+            // Execute micro-op
+            match micro(&mut self.core, bus) {
+                StepCtl::Next => {
+                    break;
+                }
+
+                StepCtl::End => {
+                    self.core.ready = true;
+                    self.core.micro_iter = None;
+                    break;
+                }
+
+                StepCtl::Skip => {
+                    if let Some(iter) = &mut self.core.micro_iter {
+                        iter.next(); // skip fake stall micro-op
+                    }
+                    break;
+                }
+
+                StepCtl::Merge => {
+                    continue;
+                }
+
+                StepCtl::SkipMerge => {
+                    if let Some(iter) = &mut self.core.micro_iter {
+                        iter.next(); // skip fake stall micro-op
+                    }
+                    continue;
                 }
             }
         }
