@@ -113,7 +113,7 @@ impl<V: Decoder> CPU<V> {
         self.core.ready = false;
     }
 
-    pub fn tick(&mut self, bus: &mut dyn Bus) {
+    pub fn tick(&mut self, bus: &mut Bus) {
         if !bus.rdy() {
             return;
         }

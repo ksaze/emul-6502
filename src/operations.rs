@@ -1,10 +1,10 @@
 use bitflags::bitflags;
 
 use crate::bus::Bus;
-use crate::cpu::{CPUCore, StackPointer, Status};
+use crate::cpu::{CPUCore, Status};
 use crate::shared::{Byte, Word};
 
-pub type MicroOp = for<'a, 'b> fn(&'a mut CPUCore, &'b mut dyn Bus) -> StepCtl;
+pub type MicroOp = for<'a, 'b> fn(&'a mut CPUCore, &'b mut Bus) -> StepCtl;
 
 #[derive(Copy, Clone)]
 pub enum StepCtl {
@@ -513,14 +513,7 @@ pub static RESET: Operation = Operation {
     valid_modes: AddressingModeFlag::NONE,
     typ: OperationType::Interrupt,
     micro: &[
-        // Cycle 0: Initialise sp and ir
-        |cpu, bus| {
-            cpu.sp = StackPointer(0);
-            cpu.ir = 0;
-            bus.read(0x00FF);
-            StepCtl::Next
-        },
-        // Internal Cycles
+        // Cycle 1 & 2: Internal Cycles
         DUMMY_READ,
         DUMMY_READ,
         // Cycle 3: fake stack push of PCH -> actually a READ from 0x0100+SP
@@ -559,15 +552,8 @@ pub static RESET: Operation = Operation {
             cpu.set_flag(Status::BREAK);
             let hi = bus.read(0xFFFD);
             cpu.pc = Word::from_le_bytes([cpu.tmp8, hi]);
-            StepCtl::Next
-        },
-        // Cycle 8: fetch first real opcode into IR
-        |cpu, bus| {
-            let opcode = bus.read(cpu.pc);
-            cpu.ir = opcode;
-            cpu.pc = cpu.pc.wrapping_add(1);
-            cpu.ready = true; // now we’re ready for the next real instruction
             StepCtl::End
         },
+        // Cycle 8: fetch first opcode & decode
     ],
 };

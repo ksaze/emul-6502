@@ -83,7 +83,7 @@ fn decode_gr1(op: Byte) -> Option<Instruction> {
 
 pub static NMOS_6502: Variant = Variant {
     rules: &[DecodeRule {
-        matches: is_gr1,
+        matches: |op| cc(op) == 0b01,
         decode: decode_gr1,
     }],
     parent: None,
