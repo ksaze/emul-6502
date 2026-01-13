@@ -1,10 +1,50 @@
 use crate::shared::{Byte, Word};
 
 pub trait Device {
-    fn maps(&self, addr: Word) -> bool;
     fn read(&mut self, addr: Word) -> Byte;
     fn write(&mut self, addr: Word, val: Byte);
     fn tick(&mut self);
+}
+
+pub struct MemoryDevice {
+    data: Box<[Byte]>,
+
+    readonly: bool,
+}
+
+impl MemoryDevice {
+    pub fn new(data: Box<[Byte]>, readonly: bool) -> Self {
+        Self { data, readonly }
+    }
+
+    pub fn ram(size: usize) -> Self {
+        assert!(size.is_power_of_two());
+        Self::new(vec![0; size].into_boxed_slice(), false)
+    }
+
+    pub fn rom(rom_data: Vec<Byte>) -> Self {
+        Self::new(rom_data.into_boxed_slice(), true)
+    }
+}
+
+impl Device for MemoryDevice {
+    #[inline]
+    fn read(&mut self, addr: Word) -> Byte {
+        self.data[addr as usize]
+    }
+
+    #[inline]
+    fn write(&mut self, addr: Word, val: Byte) {
+        if self.readonly {
+            return;
+        }
+
+        self.data[addr as usize] = val;
+    }
+
+    fn tick(&mut self) {
+        // No timing behavior for memory devices
+    }
 }
 
 pub struct RAM64K {
@@ -22,9 +62,6 @@ impl RAM64K {
 }
 
 impl Device for RAM64K {
-    fn maps(&self, _addr: Word) -> bool {
-        true
-    }
     fn read(&mut self, addr: Word) -> Byte {
         self.data[addr as usize]
     }
@@ -36,6 +73,22 @@ impl Device for RAM64K {
     fn tick(&mut self) {}
 }
 
+pub struct BusMapping {
+    pub base: Word,
+    pub mask: Word,
+    pub device: Box<dyn Device>,
+}
+
+impl BusMapping {
+    fn maps(&self, addr: Word) -> bool {
+        (addr & self.mask) == self.base
+    }
+
+    fn offset(&self, addr: Word) -> Word {
+        addr & !self.mask
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum BusOp {
     Read(Word),
@@ -44,7 +97,7 @@ pub enum BusOp {
 }
 
 pub struct Bus {
-    devices: Vec<Box<dyn Device>>,
+    mappings: Vec<BusMapping>,
     last_op: BusOp,
     data_bus: Byte,
     rdy: bool,
@@ -53,32 +106,30 @@ pub struct Bus {
 impl Bus {
     pub fn new() -> Self {
         Self {
-            devices: Vec::new(),
+            mappings: Vec::new(),
             last_op: BusOp::Internal,
             data_bus: 0xFF,
             rdy: true,
         }
     }
 
-    pub fn attach_device<D: Device + 'static>(&mut self, device: D) {
-        self.devices.push(Box::new(device));
+    pub fn attach_device<D: Device + 'static>(&mut self, device: D, base: Word, mask: Word) {
+        self.mappings.push(BusMapping {
+            base,
+            mask,
+            device: Box::new(device),
+        });
     }
 
-    fn find_device_mut(&mut self, addr: Word) -> Option<&mut dyn Device> {
-        for dev in self.devices.iter_mut() {
-            if dev.maps(addr) {
-                return Some(dev.as_mut());
-            }
-        }
-
-        None
+    fn find_device_mut(&mut self, addr: Word) -> Option<&mut BusMapping> {
+        self.mappings.iter_mut().find(|map| map.maps(addr))
     }
 
     pub fn read(&mut self, addr: Word) -> Byte {
         self.last_op = BusOp::Read(addr);
 
-        if let Some(dev) = self.find_device_mut(addr) {
-            let val = dev.read(addr);
+        if let Some(map) = self.find_device_mut(addr) {
+            let val = map.device.read(map.offset(addr));
             self.data_bus = val;
             val
         } else {
@@ -90,14 +141,14 @@ impl Bus {
         self.last_op = BusOp::Write(addr, val);
         self.data_bus = val;
 
-        if let Some(dev) = self.find_device_mut(addr) {
-            dev.write(addr, val);
+        if let Some(map) = self.find_device_mut(addr) {
+            map.device.write(map.offset(addr), val);
         }
     }
 
     pub fn tick(&mut self) -> BusOp {
-        for dev in self.devices.iter_mut() {
-            dev.tick();
+        for map in self.mappings.iter_mut() {
+            map.device.tick();
         }
 
         let performed = self.last_op;

@@ -33,16 +33,34 @@ bitflags! {
     }
 }
 
-const G1_MODES: AddressingModeFlag = AddressingModeFlag::from_bits_retain(
-    AddressingModeFlag::ACCUMULATOR.bits()
-        | AddressingModeFlag::IMMEDIATE.bits()
-        | AddressingModeFlag::ZERO_PAGE.bits()
-        | AddressingModeFlag::ZERO_PAGE_X.bits()
-        | AddressingModeFlag::ABSOLUTE.bits()
-        | AddressingModeFlag::ABSOLUTE_X.bits()
-        | AddressingModeFlag::ABSOLUTE_Y.bits()
-        | AddressingModeFlag::IDX_IND.bits()
-        | AddressingModeFlag::IND_IDX.bits(),
+impl AddressingModeFlag {
+    const fn combine(flags: &[AddressingModeFlag]) -> AddressingModeFlag {
+        let mut bits = 0;
+        let mut i = 0;
+        while i < flags.len() {
+            bits |= flags[i].bits();
+            i += 1;
+        }
+        AddressingModeFlag::from_bits_retain(bits)
+    }
+}
+
+macro_rules! combine {
+    ($($flag:expr),+ $(,)?) => {
+        AddressingModeFlag::combine(&[$($flag),+])
+    };
+}
+
+const G1_MODES: AddressingModeFlag = combine!(
+    AddressingModeFlag::ACCUMULATOR,
+    AddressingModeFlag::IMMEDIATE, 
+    AddressingModeFlag::ZERO_PAGE,
+    AddressingModeFlag::ZERO_PAGE_X,
+    AddressingModeFlag::ABSOLUTE,
+    AddressingModeFlag::ABSOLUTE_X,
+    AddressingModeFlag::ABSOLUTE_Y,
+    AddressingModeFlag::IDX_IND,
+    AddressingModeFlag::IND_IDX,
 );
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -52,7 +70,8 @@ enum OperationType {
     Store,
     Interrupt,
     Control,
-    Implied,
+    Register,
+    Timing,
 }
 
 pub struct Operation {
@@ -79,7 +98,7 @@ impl Default for Instruction {
     fn default() -> Self {
         Instruction {
             name: String::default(),
-            typ: OperationType::Implied,
+            typ: OperationType::Timing,
             addressing: &[],
             operation: &[],
         }
@@ -92,7 +111,7 @@ impl Instruction {
         if !(operation.valid_modes.contains(addressing.flag)) {
             return Instruction {
                 name: String::from("NOP"),
-                typ: OperationType::Implied,
+                typ: OperationType::Timing,
                 addressing: &IMPLIED.micro,
                 operation: &NOP.micro,
             };
@@ -134,16 +153,9 @@ static READ_LO_BYTE: MicroOp = |cpu, bus| {
 };
 
 static READ_HIGH_BYTE: MicroOp = |cpu, bus| {
-    cpu.tmp16 = ((bus.read(cpu.pc) as Word) << 8) | (cpu.tmp8 as Word);
+    cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.pc)]);
     cpu.pc = cpu.pc.wrapping_add(1);
     StepCtl::Next
-};
-
-pub static NOP: Operation = Operation {
-    name: "NOP",
-    valid_modes: AddressingModeFlag::IMPLIED,
-    typ: OperationType::Implied,
-    micro: &[],
 };
 
 /* --- ADDRESSING MODES --- */
@@ -399,6 +411,20 @@ pub static IND_IDX: AddressingMode = AddressingMode {
             StepCtl::Merge
         },
     ],
+};
+
+/* --- Misc Operation --- */
+pub static NOP: Operation = Operation {
+    name: "NOP",
+        valid_modes: combine!(
+            AddressingModeFlag::IMPLIED,
+            AddressingModeFlag::IMMEDIATE,
+            AddressingModeFlag::ZERO_PAGE, 
+            AddressingModeFlag::ZERO_PAGE_X, 
+            AddressingModeFlag::ABSOLUTE, 
+            AddressingModeFlag::ABSOLUTE_X),
+    typ: OperationType::Timing,
+    micro: &[],
 };
 
 /* --- Group 1 (ALU) --- */

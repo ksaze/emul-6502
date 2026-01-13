@@ -12,7 +12,8 @@ mod variants;
 
 fn main() {
     let mut emul = emulator::Emulator::new(NMOS_6502);
-    emul.bus.attach_device(RAM64K::new());
+    emul.bus.attach_device(RAM64K::new(), 0x0, 0xFFFF);
+    emul.attach_ram(0x0, 0xFFFF + 1);
 
     emul.cpu.core.a = 0x42;
     emul.bus.write(0x0000, 0x85); // LDA immediate opcode
