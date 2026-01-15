@@ -1,14 +1,14 @@
 [package]
-name = "emul-6502"
+name = "MOS65x"
 version = "0.1.0"
 edition = "2024"
 authors = ["Akshat Sharma akshat_sharma@zohomail.in"]
-license = "Apache 2.0"
-description = "A cycle-accurate 6502 emulator written in Rust."
-repository = "https://github.com/ksaze/emul-6502"
+license = "BSD-3-Claude License"
+description = "A cycle-accurate mos65 series emulator with support multiple variants and systems"
+repository = "https://github.com/ksaze/mos65x"
 
 [[bin]]
-name = "emu6502"
+name = "mos65x"
 path = "src/main.rs"
 
 [dependencies]

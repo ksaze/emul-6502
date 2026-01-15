@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use crate::bus::Bus;
-use crate::cpu::{CPUCore, Status};
+use crate::cpu::{ALUOuput, CPUCore, Status};
 use crate::shared::{Byte, Word};
 
 pub type MicroOp = for<'a, 'b> fn(&'a mut CPUCore, &'b mut Bus) -> StepCtl;
@@ -43,6 +43,12 @@ impl AddressingModeFlag {
         }
         AddressingModeFlag::from_bits_retain(bits)
     }
+
+    const fn clear(&self, flags: &[AddressingModeFlag]) -> Self {
+        let bits = AddressingModeFlag::combine(flags).bits();
+        
+        AddressingModeFlag::from_bits_retain(self.bits() & !bits)
+    }
 }
 
 macro_rules! combine {
@@ -61,6 +67,15 @@ const G1_MODES: AddressingModeFlag = combine!(
     AddressingModeFlag::ABSOLUTE_Y,
     AddressingModeFlag::IDX_IND,
     AddressingModeFlag::IND_IDX,
+);
+
+const G2_MODES: AddressingModeFlag = combine!(
+    AddressingModeFlag::IMMEDIATE,
+    AddressingModeFlag::ZERO_PAGE,
+    AddressingModeFlag::ACCUMULATOR,
+    AddressingModeFlag::ABSOLUTE,
+    AddressingModeFlag::ZERO_PAGE_X,
+    AddressingModeFlag::ABSOLUTE_X,
 );
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -89,18 +104,16 @@ pub struct AddressingMode {
 
 pub struct Instruction {
     pub name: String,
-    typ: OperationType,
-    addressing: &'static [MicroOp],
-    operation: &'static [MicroOp],
+    addressing: &'static AddressingMode,
+    operation: &'static Operation,
 }
 
 impl Default for Instruction {
     fn default() -> Self {
         Instruction {
             name: String::default(),
-            typ: OperationType::Timing,
-            addressing: &[],
-            operation: &[],
+            addressing: &NONE,
+            operation: &NOP,
         }
     }
 }
@@ -111,9 +124,8 @@ impl Instruction {
         if !(operation.valid_modes.contains(addressing.flag)) {
             return Instruction {
                 name: String::from("NOP"),
-                typ: OperationType::Timing,
-                addressing: &IMPLIED.micro,
-                operation: &NOP.micro,
+                addressing: &IMPLIED,
+                operation: &NOP,
             };
         }
 
@@ -125,9 +137,8 @@ impl Instruction {
 
         Instruction {
             name,
-            typ: operation.typ,
-            addressing: addressing.micro,
-            operation: operation.micro,
+            addressing: addressing,
+            operation: operation,
         }
     }
 
@@ -135,7 +146,7 @@ impl Instruction {
         &self,
     ) -> std::iter::Chain<std::slice::Iter<'static, MicroOp>, std::slice::Iter<'static, MicroOp>>
     {
-        self.addressing.iter().chain(self.operation.iter())
+        self.addressing.micro.iter().chain(self.operation.micro.iter())
     }
 }
 
@@ -189,7 +200,7 @@ pub static IMMEDIATE: AddressingMode = AddressingMode {
     name: "IMMEDIATE",
     flag: AddressingModeFlag::IMMEDIATE,
     micro: &[|cpu, bus| {
-        if cpu.instr.typ == OperationType::Store {
+        if cpu.instr.operation.typ == OperationType::Store {
             cpu.tmp16 = cpu.pc;
         } else {
             cpu.tmp8 = bus.read(cpu.pc);
@@ -206,9 +217,10 @@ pub static ZERO_PAGE: AddressingMode = AddressingMode {
     micro: &[
         READ_LO_BYTE,
         |cpu, bus| {
-            if cpu.instr.typ == OperationType::Store {
-                cpu.tmp16 = cpu.tmp8 as Word;
-            } else {
+            // Required for RMW instructions
+            cpu.tmp16 = cpu.tmp8 as Word;
+            if cpu.instr.operation.typ == OperationType::Store {}
+            else {
                 cpu.tmp8 = bus.read(cpu.tmp8 as Word);
             }
             StepCtl::Merge
@@ -227,9 +239,10 @@ pub static ZERO_PAGE_X: AddressingMode = AddressingMode {
             StepCtl::Next
         },
         |cpu, bus| {
-            if cpu.instr.typ == OperationType::Store {
-                cpu.tmp16 = cpu.tmp8 as Word;
-            } else {
+            // Required for RMW instructions
+            cpu.tmp16 = cpu.tmp8 as Word;
+            if cpu.instr.operation.typ == OperationType::Store {}
+            else {
                 cpu.tmp8 = bus.read(cpu.tmp8 as Word);
             }
             StepCtl::Merge
@@ -248,9 +261,10 @@ pub static ZERO_PAGE_Y: AddressingMode = AddressingMode {
             StepCtl::Next
         },
         |cpu, bus| {
-            if cpu.instr.typ == OperationType::Store {
-                cpu.tmp16 = cpu.tmp8 as Word 
-            } else {
+            // Required for RMW instructions
+            cpu.tmp16 = cpu.tmp8 as Word;
+            if cpu.instr.operation.typ == OperationType::Store {}
+            else {
                 cpu.tmp8 = bus.read(cpu.tmp8 as Word);
             }
             StepCtl::Merge
@@ -266,7 +280,7 @@ pub static ABSOLUTE: AddressingMode = AddressingMode {
         READ_LO_BYTE,
         READ_HIGH_BYTE,
         |cpu, bus| {
-            if cpu.instr.typ == OperationType::Store {} 
+            if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
@@ -290,7 +304,7 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
             if cpu.crossed {
                 StepCtl::Next
             } else {
-                if cpu.instr.typ == OperationType::Store {} 
+                if cpu.instr.operation.typ == OperationType::Store {} 
                 else {
                     cpu.tmp8 = bus.read(cpu.tmp16);
                 }
@@ -300,7 +314,7 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
         |cpu, bus| {
             // Fix high byte
             cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
-            if cpu.instr.typ == OperationType::Store {} 
+            if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
@@ -324,7 +338,7 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
             if cpu.crossed {
                 StepCtl::Next
             } else {
-                if cpu.instr.typ == OperationType::Store {} 
+                if cpu.instr.operation.typ == OperationType::Store {} 
                 else {
                     cpu.tmp8 = bus.read(cpu.tmp16);
                 }
@@ -334,7 +348,7 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
         |cpu, bus| {
             // Fix high byte
             cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
-            if cpu.instr.typ == OperationType::Store {} 
+            if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
@@ -363,7 +377,7 @@ pub static IDX_IND: AddressingMode = AddressingMode {
             StepCtl::Next
         },
         |cpu, bus| {
-            if cpu.instr.typ == OperationType::Store {} 
+            if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
@@ -394,7 +408,7 @@ pub static IND_IDX: AddressingMode = AddressingMode {
             if cpu.crossed {
                 StepCtl::Next
             } else {
-                if cpu.instr.typ == OperationType::Store {} 
+                if cpu.instr.operation.typ == OperationType::Store {} 
                 else {
                     cpu.tmp8 = bus.read(cpu.tmp16);
                 }
@@ -404,7 +418,7 @@ pub static IND_IDX: AddressingMode = AddressingMode {
         |cpu, bus| {
             // Fix high byte
             cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
-            if cpu.instr.typ == OperationType::Store {} 
+            if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
@@ -427,13 +441,14 @@ pub static NOP: Operation = Operation {
     micro: &[],
 };
 
-/* --- Group 1 (ALU) --- */
+/* --- Group 1  --- */
 pub static ORA: Operation = Operation {
     name: "ORA",
     valid_modes: G1_MODES,
     typ: OperationType::Read,
     micro: &[|cpu, _bus| {
         cpu.a |= cpu.tmp8;
+        cpu.flags.set_nz(cpu.a);
         StepCtl::End
     }],
 };
@@ -444,6 +459,7 @@ pub static AND: Operation = Operation {
     typ: OperationType::Read,
     micro: &[|cpu, _bus| {
         cpu.a &= cpu.tmp8;
+        cpu.flags.set_nz(cpu.a);
         StepCtl::End
     }],
 };
@@ -454,6 +470,7 @@ pub static EOR: Operation = Operation {
     typ: OperationType::Read,
     micro: &[|cpu, _bus| {
         cpu.a ^= cpu.tmp8;
+        cpu.flags.set_nz(cpu.a);
         StepCtl::End
     }],
 };
@@ -462,27 +479,29 @@ pub static ADC: Operation = Operation {
     name: "ADC",
     valid_modes: G1_MODES,
     typ: OperationType::Read,
-    micro: &[|cpu, _bus| {
-        let accum_before_op = cpu.a;
-        let carry = cpu.flags.contains(Status::CARRY) as Byte;
+    micro: &[
+        |cpu, _bus| {
+            match cpu.adc(cpu.tmp8) {
+                ALUOuput::Done(value) => {
+                    cpu.a = value;
+                    StepCtl::End
+                }
+                ALUOuput::Penalty(value) => {
+                    cpu.tmp8 = value;
+                    StepCtl::Next
+                }
+            }
+         },
 
-        cpu.a = cpu.a.wrapping_add(cpu.tmp8.wrapping_add(carry));
-
-        cpu.update_flag(Status::CARRY, accum_before_op > cpu.a);
-        cpu.update_flag(Status::ZERO, cpu.a == 0);
-        cpu.update_flag(Status::NEGATIVE, cpu.a & 0x80 != 0);
-
-        let overflow = (accum_before_op ^ cpu.a) & (cpu.tmp8 ^ cpu.a) & 0x80 != 0;
-        cpu.update_flag(Status::OVERFLOW, overflow);
-        StepCtl::End
-    }],
+        |_cpu, _bus| {
+            todo!()
+        },
+    ],
 };
 
 pub static STA: Operation = Operation {
     name: "STA",
-    valid_modes: AddressingModeFlag::from_bits_retain(
-        G1_MODES.bits() & !AddressingModeFlag::IMMEDIATE.bits(),
-    ),
+    valid_modes: G1_MODES.clear(&[AddressingModeFlag::IMMEDIATE]),
     typ: OperationType::Store,
     micro: &[|cpu, bus| {
         bus.write(cpu.tmp16, cpu.a);
@@ -496,6 +515,7 @@ pub static LDA: Operation = Operation {
     typ: OperationType::Read,
     micro: &[|cpu, _bus| {
         cpu.a = cpu.tmp8;
+        cpu.flags.set_nz(cpu.a);
         StepCtl::End
     }],
 };
@@ -505,9 +525,9 @@ pub static CMP: Operation = Operation {
     valid_modes: G1_MODES,
     typ: OperationType::Read,
     micro: &[|cpu, _bus| {
-        cpu.update_flag(Status::CARRY, cpu.a >= cpu.tmp8);
-        cpu.update_flag(Status::ZERO, cpu.a == cpu.tmp8);
-        cpu.update_flag(Status::NEGATIVE, cpu.a.wrapping_sub(cpu.tmp8) & 0x80 != 0);
+        cpu.flags.set(Status::CARRY, cpu.a >= cpu.tmp8);
+        cpu.flags.set(Status::ZERO, cpu.a == cpu.tmp8);
+        cpu.flags.set(Status::NEGATIVE, cpu.a.wrapping_sub(cpu.tmp8) & 0x80 != 0);
         StepCtl::End
     }],
 };
@@ -516,20 +536,143 @@ pub static SBC: Operation = Operation {
     name: "SBC",
     valid_modes: G1_MODES,
     typ: OperationType::Read,
-    micro: &[|cpu, _bus| {
-        let accum_before_op = cpu.a;
-        let carry = cpu.flags.contains(Status::CARRY) as Byte;
+    micro: &[
+        |cpu, _bus| {
+            match cpu.sbc(cpu.tmp8) {
+                ALUOuput::Done(value) => {
+                    cpu.a = value;
+                    StepCtl::End
+                }
+                ALUOuput::Penalty(value) => {
+                    cpu.tmp8 = value;
+                    StepCtl::Next
+                }
+            }
+         },
 
-        cpu.a = cpu.a.wrapping_add((!cpu.tmp8).wrapping_add(carry));
+        |_cpu, _bus| {
+            todo!()
+        },
+    ],
+};
 
-        cpu.update_flag(Status::CARRY, accum_before_op > cpu.a);
-        cpu.update_flag(Status::ZERO, cpu.a == 0);
-        cpu.update_flag(Status::NEGATIVE, cpu.a & 0x80 != 0);
+/* --- Group 2 --- */
+macro_rules! define_shift_op {
+    ($name:ident, $alu_fn:ident) => {
+        pub static $name: Operation = Operation {
+            name: stringify!($name),
+            valid_modes: G2_MODES.clear(&[AddressingModeFlag::IMMEDIATE]),
+            typ: OperationType::RMW,
+            micro: &[
+                // Accumulator form
+                |cpu, _bus| {
+                    if cpu.instr.addressing.flag.contains(AddressingModeFlag::ACCUMULATOR) {
+                        cpu.a = cpu.$alu_fn(cpu.a);
+                        StepCtl::End
+                    } else {
+                        StepCtl::Next
+                    }
+                },
 
-        let overflow = (accum_before_op ^ cpu.a) & (cpu.tmp8 ^ cpu.a) & 0x80 != 0;
-        cpu.update_flag(Status::OVERFLOW, overflow);
+                // Dummy write + modify
+                |cpu, bus| {
+                    bus.write(cpu.tmp16, cpu.tmp8);
+                    cpu.tmp8 = cpu.$alu_fn(cpu.tmp8);
+                    StepCtl::Next
+                },
+
+                // Final writeback
+                |cpu, bus| {
+                    bus.write(cpu.tmp16, cpu.tmp8);
+                    StepCtl::End
+                },
+            ],
+        };
+    };
+}
+
+define_shift_op!(ASL, alu_shl);
+define_shift_op!(LSR, alu_shr);
+define_shift_op!(ROL, alu_rol);
+define_shift_op!(ROR, alu_ror);
+
+
+pub static STX: Operation = Operation {
+    name: "STX",
+    valid_modes: combine!(AddressingModeFlag::ZERO_PAGE, AddressingModeFlag::ABSOLUTE, AddressingModeFlag::ZERO_PAGE_Y),
+    typ: OperationType::Store,
+    micro: &[|cpu, bus| {
+        bus.write(cpu.tmp16, cpu.x);
         StepCtl::End
     }],
+};
+
+
+pub static LDX: Operation = Operation {
+    name: "LDX",
+    valid_modes: combine!(
+        AddressingModeFlag::IMMEDIATE,
+        AddressingModeFlag::ZERO_PAGE,
+        AddressingModeFlag::ABSOLUTE,
+        AddressingModeFlag::ZERO_PAGE_Y,
+        AddressingModeFlag::ABSOLUTE_Y),
+    typ: OperationType::Read,
+    micro: &[|cpu, _bus| {
+        cpu.x = cpu.tmp8;
+        cpu.flags.set_nz(cpu.x);
+        StepCtl::End
+    }],
+};
+
+pub static INC: Operation = Operation {
+    name: "INC",
+    valid_modes: G2_MODES.clear(&[AddressingModeFlag::IMMEDIATE, AddressingModeFlag::ACCUMULATOR]),
+    typ: OperationType::RMW,
+    micro: &[
+        |_cpu, _bus| {
+            StepCtl::Next
+        },
+
+        // Dummy write + modify
+        |cpu, bus| {
+            bus.write(cpu.tmp16, cpu.tmp8);
+            cpu.tmp8 = cpu.tmp8.wrapping_add(1);
+            cpu.flags.set_nz(cpu.tmp8);
+            StepCtl::Next
+        },
+
+        // Final writeback
+        |cpu, bus| {
+            bus.write(cpu.tmp16, cpu.tmp8);
+            StepCtl::End
+        },
+    ],
+};
+
+
+pub static DEC: Operation = Operation {
+    name: "DEC",
+    valid_modes: G2_MODES.clear(&[AddressingModeFlag::IMMEDIATE, AddressingModeFlag::ACCUMULATOR]),
+    typ: OperationType::RMW,
+    micro: &[
+        |_cpu, _bus| {
+            StepCtl::Next
+        },
+
+        // Dummy write + modify
+        |cpu, bus| {
+            bus.write(cpu.tmp16, cpu.tmp8);
+            cpu.tmp8 = cpu.tmp8.wrapping_sub(1);
+            cpu.flags.set_nz(cpu.tmp8);
+            StepCtl::Next
+        },
+
+        // Final writeback
+        |cpu, bus| {
+            bus.write(cpu.tmp16, cpu.tmp8);
+            StepCtl::End
+        },
+    ],
 };
 
 /* --- INTERRUPTS --- */
@@ -566,8 +709,8 @@ pub static RESET: Operation = Operation {
         // Cycle 6: fetch low byte of RESET vector at $FFFC
         // Also disable interrupts and clear decimal flag
         |cpu, bus| {
-            cpu.set_flag(Status::IRQ_DISABLE);
-            cpu.clear_flag(Status::DECIMAL);
+            cpu.flags.set(Status::IRQ_DISABLE, true);
+            cpu.flags.set(Status::DECIMAL, false);
 
             let lo = bus.read(0xFFFC);
             cpu.tmp8 = lo;
@@ -575,7 +718,7 @@ pub static RESET: Operation = Operation {
         },
         // Cycle 7: fetch high byte of RESET vector at $FFFD
         |cpu, bus| {
-            cpu.set_flag(Status::BREAK);
+            cpu.flags.set(Status::BREAK, true);
             let hi = bus.read(0xFFFD);
             cpu.pc = Word::from_le_bytes([cpu.tmp8, hi]);
             StepCtl::End

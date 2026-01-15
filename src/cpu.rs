@@ -1,7 +1,7 @@
 use crate::bus::Bus;
 use crate::operations::{Instruction, MicroOp, NONE, RESET, StepCtl};
 use crate::shared::{Byte, Word};
-use crate::variants::Decoder;
+use crate::variants::{ALUVariant, Decoder};
 
 use bitflags::bitflags;
 
@@ -37,6 +37,24 @@ bitflags! {
     }
 }
 
+impl Status {
+    #[inline]
+    pub fn set_nz(&mut self, value: Byte) {
+        self.set(Status::ZERO, value == 0);
+        self.set(Status::NEGATIVE, value & 0x80 != 9);
+    }
+}
+
+pub enum ALUOuput {
+    Done(Byte),
+    Penalty(Byte),
+}
+
+pub struct ALUImpl {
+    pub adc: fn(&mut CPUCore, Byte) -> ALUOuput,
+    pub sbc: fn(&mut CPUCore, Byte) -> ALUOuput,
+}
+
 pub struct CPUCore {
     pub pc: Word,
     pub sp: StackPointer,
@@ -45,6 +63,8 @@ pub struct CPUCore {
     pub x: Byte,
     pub y: Byte,
     pub flags: Status,
+
+    pub alu: &'static ALUImpl,
 
     pub ir: Byte,
     pub tmp8: Byte,
@@ -59,30 +79,73 @@ pub struct CPUCore {
 }
 
 impl CPUCore {
-    pub fn update_flag(&mut self, flag: Status, val: bool) {
-        self.flags = if val {
-            self.flags | flag
-        } else {
-            self.flags & !flag
-        };
+    #[inline]
+    pub fn adc(&mut self, value: Byte) -> ALUOuput {
+        (self.alu.adc)(self, value)
     }
 
-    pub fn set_flag(&mut self, flag: Status) {
-        self.flags |= flag;
+    #[inline]
+    pub fn sbc(&mut self, value: Byte) -> ALUOuput {
+        (self.alu.sbc)(self, value)
     }
 
-    pub fn clear_flag(&mut self, flag: Status) {
-        self.flags &= !flag;
+    #[inline]
+    pub fn alu_shl(&mut self, value: Byte) -> Byte {
+        self.flags.set(Status::CARRY, value & 0x80 != 0);
+
+        let result = value << 1;
+
+        self.flags.set_nz(result);
+
+        result
+    }
+
+    #[inline]
+    pub fn alu_shr(&mut self, value: Byte) -> Byte {
+        self.flags.set(Status::CARRY, (value & 0x01) != 0);
+
+        let result = value >> 1;
+
+        self.flags.set_nz(result);
+
+        result
+    }
+
+    #[inline]
+    pub fn alu_rol(&mut self, value: u8) -> u8 {
+        let carry_in = self.flags.contains(Status::CARRY) as Byte;
+        let carry_out = (value & 0x80) != 0;
+
+        let result = (value << 1) | carry_in;
+
+        self.flags.set(Status::CARRY, carry_out);
+        self.flags.set_nz(result);
+
+        result
+    }
+
+    #[inline]
+    pub fn alu_ror(&mut self, value: u8) -> u8 {
+        let carry_in = (self.flags.contains(Status::CARRY) as Byte) << 7;
+
+        // Carry gets bit 0
+        self.flags.set(Status::CARRY, (value & 0x01) != 0);
+
+        let result = (value >> 1) | carry_in;
+
+        self.flags.set_nz(result);
+
+        result
     }
 }
 
 #[allow(clippy::upper_case_acronyms)]
-pub struct CPU<V: Decoder> {
+pub struct CPU<V: Decoder + ALUVariant> {
     pub core: CPUCore,
     pub decoder: V,
 }
 
-impl<V: Decoder> CPU<V> {
+impl<V: Decoder + ALUVariant> CPU<V> {
     pub fn new(variant: V) -> Self {
         CPU {
             core: CPUCore {
@@ -92,6 +155,8 @@ impl<V: Decoder> CPU<V> {
                 x: 0,
                 y: 0,
                 flags: Status::UNUSED,
+
+                alu: variant.alu(),
 
                 ir: 0,
                 tmp8: 0,

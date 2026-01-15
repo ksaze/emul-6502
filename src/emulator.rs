@@ -1,18 +1,18 @@
 use crate::bus::{Bus, MemoryDevice};
 use crate::cpu::CPU;
 use crate::shared::*;
-use crate::variants::Decoder;
+use crate::variants::{ALUVariant, Decoder};
 
 pub struct Emulator<V>
 where
-    V: Decoder,
+    V: Decoder + ALUVariant,
 {
     pub cpu: CPU<V>,
     pub bus: Bus,
     pub cycles: u8,
 }
 
-impl<V: Decoder> Emulator<V> {
+impl<V: Decoder + ALUVariant> Emulator<V> {
     pub fn new(variant: V) -> Emulator<V> {
         Self {
             cpu: CPU::new(variant),
