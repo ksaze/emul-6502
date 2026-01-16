@@ -45,14 +45,15 @@ impl Status {
     }
 }
 
-pub enum ALUOuput {
-    Done(Byte),
-    Penalty(Byte),
+pub enum ALUOuput<T> {
+    Done(T),
+    Penalty(T),
 }
 
 pub struct ALUImpl {
-    pub adc: fn(&mut CPUCore, Byte) -> ALUOuput,
-    pub sbc: fn(&mut CPUCore, Byte) -> ALUOuput,
+    pub adc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
+    pub sbc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
+    pub ind_addr_inc: fn(Word) -> ALUOuput<Word>,
 }
 
 pub struct CPUCore {
@@ -80,13 +81,18 @@ pub struct CPUCore {
 
 impl CPUCore {
     #[inline]
-    pub fn adc(&mut self, value: Byte) -> ALUOuput {
+    pub fn adc(&mut self, value: Byte) -> ALUOuput<Byte> {
         (self.alu.adc)(self, value)
     }
 
     #[inline]
-    pub fn sbc(&mut self, value: Byte) -> ALUOuput {
+    pub fn sbc(&mut self, value: Byte) -> ALUOuput<Byte> {
         (self.alu.sbc)(self, value)
+    }
+
+    #[inline]
+    pub fn ind_addr_inc(&self, addr: Word) -> ALUOuput<Word> {
+        (self.alu.ind_addr_inc)(addr)
     }
 
     #[inline]

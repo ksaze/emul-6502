@@ -124,6 +124,36 @@ fn decode_gr2(op: Byte) -> Option<Instruction> {
     Some(Instruction::new(addr, opn))
 }
 
+fn decode_gr3(op: Byte) -> Option<Instruction> {
+    let mut addr = match bbb(op) {
+        0 => &IMMEDIATE,
+        1 => &ZERO_PAGE,
+        3 => &ABSOLUTE,
+        5 => &ZERO_PAGE_X,
+        7 => &ABSOLUTE_X,
+        _ => return None,
+    };
+
+    let opn = match aaa(op) {
+        0 => &BIT,
+        1 => &JMP,
+        2 => &JMP,
+        3 => {
+            if op == 0x6C {
+                addr = &ABS_IND
+            }
+            &JMP
+        }
+        4 => &STY,
+        5 => &LDY,
+        6 => &CPY,
+        7 => &CPX,
+        _ => return None,
+    };
+
+    Some(Instruction::new(addr, opn))
+}
+
 fn set_binarymode_flags(cpu: &mut CPUCore, a: u16, m: u16, result: u16) {
     cpu.flags.set(Status::CARRY, result > 0xFF);
     cpu.flags
@@ -212,6 +242,14 @@ static NMOS_ALU: ALUImpl = ALUImpl {
             cpu.flags.set(Status::CARRY, result > 0xFF);
             ALUOuput::Done(result as Byte)
         }
+    },
+
+    ind_addr_inc: |addr| {
+        let lo = addr & 0x00FF;
+        let hi = addr & 0xFF00;
+
+        // Bug: Wrap within page: $12FF → $1200
+        ALUOuput::Done(hi | ((lo + 1) & 0x00FF))
     },
 };
 
@@ -429,6 +467,10 @@ pub static NMOS_6502: Variant = Variant {
         DecodeRule {
             matches: |op| cc(op) == 0b10,
             decode: decode_gr2,
+        },
+        DecodeRule {
+            matches: |op| cc(op) == 0b00,
+            decode: decode_gr3,
         },
     ],
     parent: None,

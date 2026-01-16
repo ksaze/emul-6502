@@ -30,6 +30,7 @@ bitflags! {
         const ABSOLUTE_Y  = 0b0000_0010_0000_0000;
         const IDX_IND     = 0b0000_0100_0000_0000;
         const IND_IDX     = 0b0000_1000_0000_0000;
+        const ABS_IND     = 0b0001_0000_0000_0000;
     }
 }
 
@@ -73,6 +74,14 @@ const G2_MODES: AddressingModeFlag = combine!(
     AddressingModeFlag::IMMEDIATE,
     AddressingModeFlag::ZERO_PAGE,
     AddressingModeFlag::ACCUMULATOR,
+    AddressingModeFlag::ABSOLUTE,
+    AddressingModeFlag::ZERO_PAGE_X,
+    AddressingModeFlag::ABSOLUTE_X,
+);
+
+const G3_MODES: AddressingModeFlag = combine! (
+    AddressingModeFlag::IMMEDIATE,
+    AddressingModeFlag::ZERO_PAGE,
     AddressingModeFlag::ABSOLUTE,
     AddressingModeFlag::ZERO_PAGE_X,
     AddressingModeFlag::ABSOLUTE_X,
@@ -278,7 +287,14 @@ pub static ABSOLUTE: AddressingMode = AddressingMode {
     #[rustfmt::skip]
     micro: &[
         READ_LO_BYTE,
-        READ_HIGH_BYTE,
+        |cpu, bus| {
+            cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.pc)]);
+            cpu.pc = cpu.pc.wrapping_add(1);
+            if cpu.instr.operation.typ == OperationType::Control {
+                StepCtl::SkipMerge
+            } else { StepCtl::Next}
+        },
+
         |cpu, bus| {
             if cpu.instr.operation.typ == OperationType::Store {} 
             else {
@@ -286,6 +302,39 @@ pub static ABSOLUTE: AddressingMode = AddressingMode {
             }
             StepCtl::Merge
         },
+    ],
+};
+
+pub static ABS_IND: AddressingMode = AddressingMode {
+    name: "ABS_IND",
+    flag: AddressingModeFlag::ABS_IND,
+    #[rustfmt::skip]
+    micro: &[
+        READ_LO_BYTE,
+        READ_HIGH_BYTE,
+        |cpu, bus| {
+            cpu.tmp8 = bus.read(cpu.tmp16);
+            match cpu.ind_addr_inc(cpu.tmp16) {
+                ALUOuput::Done(addr) => {
+                    cpu.tmp16 = addr;
+                    StepCtl::Skip
+                }
+                ALUOuput::Penalty(addr) => {
+                    cpu.tmp16 = addr;
+                    StepCtl::Next
+                }
+            }
+        },
+        |cpu, bus| {
+            bus.read(cpu.tmp16);
+            // Fix page in case of page wrap
+            if cpu.tmp16 & 0xFF == 0 {cpu.tmp16 += 1 << 8};
+            StepCtl::Next
+        },
+        |cpu, bus| {
+            cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.tmp16)]);
+            StepCtl::Merge
+        }
     ],
 };
 
@@ -673,6 +722,79 @@ pub static DEC: Operation = Operation {
             StepCtl::End
         },
     ],
+};
+
+/* --- Group 3 --- */
+pub static BIT: Operation = Operation {
+    name: "BIT",
+    valid_modes: combine!(AddressingModeFlag::ZERO_PAGE, AddressingModeFlag::ABSOLUTE),
+    typ: OperationType::Read,
+    micro: &[
+        |cpu, _bus| {
+            cpu.flags.set_nz(cpu.a & cpu.tmp8);
+            // V Flag => Copy bit 6 from memory
+            cpu.flags.set(Status::OVERFLOW, cpu.tmp8 & 0x40 != 0);
+            StepCtl::End
+        }
+    ],
+};
+
+pub static JMP: Operation = Operation {
+    name: "JMP",
+    valid_modes: combine!(AddressingModeFlag::ABSOLUTE, AddressingModeFlag::ABS_IND),
+    typ: OperationType::Control,
+    micro: &[
+        |cpu, _bus| {
+            cpu.pc = cpu.tmp16;
+            StepCtl::End
+        }
+    ]
+};
+
+
+pub static STY: Operation = Operation {
+    name: "STY",
+    valid_modes: G3_MODES.clear(&[AddressingModeFlag::IMMEDIATE, AddressingModeFlag::ABSOLUTE_X]),
+    typ: OperationType::Store,
+    micro: &[|cpu, bus| {
+        bus.write(cpu.tmp16, cpu.y);
+        StepCtl::End
+    }],
+};
+
+
+pub static LDY: Operation = Operation {
+    name: "LDY",
+    valid_modes: G3_MODES,
+    typ: OperationType::Read,
+    micro: &[|cpu, _bus| {
+        cpu.y = cpu.tmp8;
+        cpu.flags.set_nz(cpu.y);
+        StepCtl::End
+    }],
+};
+
+
+pub static CPY: Operation = Operation {
+    name: "CPY",
+    valid_modes: G3_MODES.clear(&[AddressingModeFlag::ZERO_PAGE_X, AddressingModeFlag::ZERO_PAGE_Y]),
+    typ: OperationType::Read,
+    micro: &[|cpu, _bus| {
+        cpu.flags.set(Status::CARRY, cpu.y >= cpu.tmp8);
+        cpu.flags.set_nz(cpu.y.wrapping_sub(cpu.tmp8));
+        StepCtl::End
+    }],
+};
+
+pub static CPX: Operation = Operation {
+    name: "CPX",
+    valid_modes: G3_MODES.clear(&[AddressingModeFlag::ZERO_PAGE_X, AddressingModeFlag::ZERO_PAGE_Y]),
+    typ: OperationType::Read,
+    micro: &[|cpu, _bus| {
+        cpu.flags.set(Status::CARRY, cpu.x >= cpu.tmp8);
+        cpu.flags.set_nz(cpu.x.wrapping_sub(cpu.tmp8));
+        StepCtl::End
+    }],
 };
 
 /* --- INTERRUPTS --- */
