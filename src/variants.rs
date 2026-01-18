@@ -20,6 +20,16 @@ fn cc(op: u8) -> u8 {
     op & 0x03
 }
 
+#[inline]
+fn lnibble(op: u8) -> u8 {
+    op & 0x0F
+}
+
+#[inline]
+fn hnibble(op: u8) -> u8 {
+    (op & 0xF0) >> 4
+}
+
 pub trait Decoder {
     fn decode(&self, opcode: Byte) -> Option<Instruction>;
 }
@@ -148,6 +158,66 @@ fn decode_gr3(op: Byte) -> Option<Instruction> {
         5 => &LDY,
         6 => &CPY,
         7 => &CPX,
+        _ => return None,
+    };
+
+    Some(Instruction::new(addr, opn))
+}
+
+fn decode_branch(op: Byte) -> Option<Instruction> {
+    let addr = &RELATIVE;
+
+    let opn = match aaa(op) {
+        0 => &BPL,
+        1 => &BMI,
+        2 => &BVC,
+        3 => &BVS,
+        4 => &BCC,
+        5 => &BCS,
+        6 => &BNE,
+        7 => &BEQ,
+        _ => return None,
+    };
+
+    Some(Instruction::new(addr, opn))
+}
+
+fn decode_sb1(op: Byte) -> Option<Instruction> {
+    let addr = &IMPLIED;
+
+    let opn = match hnibble(op) {
+        0x0 => &PHP,
+        0x1 => &CLC,
+        0x2 => &PLP,
+        0x3 => &SEC,
+        0x4 => &PHA,
+        0x5 => &CLI,
+        0x6 => &PLA,
+        0x7 => &SEI,
+        0x8 => &DEY,
+        0x9 => &TYA,
+        0xA => &TAY,
+        0xB => &CLV,
+        0xC => &INY,
+        0xD => &CLD,
+        0xE => &INX,
+        0xF => &SED,
+        _ => return None,
+    };
+
+    Some(Instruction::new(addr, opn))
+}
+
+fn decode_sb2(op: Byte) -> Option<Instruction> {
+    let addr = &IMPLIED;
+
+    let opn = match hnibble(op) {
+        0x8 => &TXA,
+        0x9 => &TXS,
+        0xA => &TAX,
+        0xB => &TSX,
+        0xC => &DEX,
+        0xE => &NOP,
         _ => return None,
     };
 
@@ -460,6 +530,18 @@ mod adc_sbc_tests {
 
 pub static NMOS_6502: Variant = Variant {
     rules: &[
+        DecodeRule {
+            matches: |op| lnibble(op) == 0x8,
+            decode: decode_sb1,
+        },
+        DecodeRule {
+            matches: |op| lnibble(op) == 0xA,
+            decode: decode_sb2,
+        },
+        DecodeRule {
+            matches: |op| (op & 0x1F) == 0b100000,
+            decode: decode_branch,
+        },
         DecodeRule {
             matches: |op| cc(op) == 0b01,
             decode: decode_gr1,

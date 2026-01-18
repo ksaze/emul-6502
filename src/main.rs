@@ -1,6 +1,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
 
+use crate::cpu::Status;
 use crate::variants::NMOS_6502;
 
 mod bus;
@@ -12,36 +13,57 @@ mod variants;
 
 fn main() {
     let mut emul = emulator::Emulator::new(NMOS_6502);
-
-    // Attach full RAM
+    // Full RAM
     emul.attach_ram(0x0000, 0x10000);
 
-    // Reset vector → start at $0000
+    // Reset vector → $0200
     emul.bus.write(0xFFFC, 0x00);
-    emul.bus.write(0xFFFD, 0x00);
+    emul.bus.write(0xFFFD, 0x02);
 
-    // Program at $0000:
-    // JMP ($0010)
-    emul.bus.write(0x0000, 0x6C); // JMP (abs)
-    emul.bus.write(0x0001, 0x10); // pointer low
-    emul.bus.write(0x0002, 0x00); // pointer high
+    // Better test: push both, then pull both (LIFO order)
+    let program = [
+        0xA9, 0x42, // LDA #$42
+        0x48, // PHA          - Push $42
+        0x38, // SEC
+        0x78, // SEI
+        0xF8, // SED
+        0x08, // PHP          - Push status
+        // Now stack has: [deeper: $42] [top: status]
+        // Pull in reverse order (LIFO)
+        0x28, // PLP          - Pull status first
+        0x68, // PLA          - Pull $42 second
+        0xEA, // NOP
+    ];
 
-    // Indirect pointer at $0010 → $1234
-    emul.bus.write(0x0010, 0x34); // target low
-    emul.bus.write(0x0011, 0x12); // target high
+    for (i, b) in program.iter().enumerate() {
+        emul.bus.write(0x0200 + i as u16, *b);
+    }
 
-    // Reset CPU (loads PC from reset vector)
     emul.reset_cpu();
+    let initial_sp = emul.cpu.core.sp.value;
 
-    // Run enough cycles for JMP (abs)
-    // NMOS6502 takes 5 cycles
-    for _ in 0..5 {
+    // Execute everything
+    for _ in 0..50 {
         emul.tick();
     }
 
-    // Verify jump
-    assert_eq!(emul.cpu.core.pc, 0x1234);
+    let cpu = &emul.cpu.core;
 
-    println!("Indirect JMP test passed");
-    println!("Cycles executed: {}", emul.cycles);
+    println!("=== Stack Operation Tests ===\n");
+
+    println!("PHA/PLA Test:");
+    assert_eq!(cpu.a, 0x42, "PLA failed");
+    println!("  ✅ A = ${:02X}", cpu.a);
+
+    println!("\nPHP/PLP Test:");
+    assert!(cpu.flags.contains(Status::CARRY), "C not restored");
+    assert!(cpu.flags.contains(Status::IRQ_DISABLE), "I not restored");
+    assert!(cpu.flags.contains(Status::DECIMAL), "D not restored");
+    println!("  ✅ Flags restored: {:08b}", cpu.flags.bits());
+
+    println!("\nStack Pointer Test:");
+    assert_eq!(cpu.sp.value, initial_sp, "SP not balanced");
+    println!("  ✅ SP = ${:02X} (balanced)", cpu.sp.value);
+
+    println!("\n=== All Tests Passed ===");
 }

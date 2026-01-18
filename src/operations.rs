@@ -31,6 +31,7 @@ bitflags! {
         const IDX_IND     = 0b0000_0100_0000_0000;
         const IND_IDX     = 0b0000_1000_0000_0000;
         const ABS_IND     = 0b0001_0000_0000_0000;
+        const RELATIVE    = 0b0010_0000_0000_0000;
     }
 }
 
@@ -53,7 +54,7 @@ impl AddressingModeFlag {
 }
 
 macro_rules! combine {
-    ($($flag:expr),+ $(,)?) => {
+    ($($flag:path),+ $(,)?) => {
         AddressingModeFlag::combine(&[$($flag),+])
     };
 }
@@ -235,6 +236,16 @@ pub static ZERO_PAGE: AddressingMode = AddressingMode {
             StepCtl::Merge
         }
     ],
+};
+
+pub static RELATIVE: AddressingMode = AddressingMode {
+    name: "RELATIVE",
+    flag: AddressingModeFlag::RELATIVE,
+    micro: &[|cpu, bus| {
+        cpu.tmp8 = bus.read(cpu.pc);
+        cpu.pc = cpu.pc.wrapping_add(1);
+        StepCtl::Merge
+    }],
 };
 
 pub static ZERO_PAGE_X: AddressingMode = AddressingMode {
@@ -575,8 +586,7 @@ pub static CMP: Operation = Operation {
     typ: OperationType::Read,
     micro: &[|cpu, _bus| {
         cpu.flags.set(Status::CARRY, cpu.a >= cpu.tmp8);
-        cpu.flags.set(Status::ZERO, cpu.a == cpu.tmp8);
-        cpu.flags.set(Status::NEGATIVE, cpu.a.wrapping_sub(cpu.tmp8) & 0x80 != 0);
+        cpu.flags.set_nz(cpu.a.wrapping_sub(cpu.tmp8));
         StepCtl::End
     }],
 };
@@ -606,10 +616,10 @@ pub static SBC: Operation = Operation {
 };
 
 /* --- Group 2 --- */
-macro_rules! define_shift_op {
-    ($name:ident, $alu_fn:ident) => {
-        pub static $name: Operation = Operation {
-            name: stringify!($name),
+macro_rules! shift {
+    ($name:literal, $alu_fn:ident) => {
+        Operation {
+            name: $name,
             valid_modes: G2_MODES.clear(&[AddressingModeFlag::IMMEDIATE]),
             typ: OperationType::RMW,
             micro: &[
@@ -636,15 +646,14 @@ macro_rules! define_shift_op {
                     StepCtl::End
                 },
             ],
-        };
+        }
     };
 }
 
-define_shift_op!(ASL, alu_shl);
-define_shift_op!(LSR, alu_shr);
-define_shift_op!(ROL, alu_rol);
-define_shift_op!(ROR, alu_ror);
-
+pub static ASL: Operation = shift!("ASL", alu_shl);
+pub static LSR: Operation = shift!("LSR", alu_shr);
+pub static ROL: Operation = shift!("ROL", alu_rol);
+pub static ROR: Operation = shift!("ROR", alu_ror);
 
 pub static STX: Operation = Operation {
     name: "STX",
@@ -797,6 +806,242 @@ pub static CPX: Operation = Operation {
     }],
 };
 
+/* --- Branch Instructinos --- */
+macro_rules! branch {
+    ($name:literal, $flag:path, $flag_value:literal) => {
+        Operation {
+            name: $name,
+            valid_modes: AddressingModeFlag::RELATIVE,
+            typ: OperationType::Control,
+            micro: &[
+                |cpu, _bus| {
+                    if cpu.flags.contains($flag) == $flag_value {
+                        StepCtl::Next
+                    } else {
+                        StepCtl::End
+                    }
+                },
+
+                |cpu, bus| {
+                    bus.read(cpu.pc);
+                    let old_pcl = cpu.pc as u8;
+                    let new_pcl = old_pcl.wrapping_add(cpu.tmp8);
+                    cpu.pc = (cpu.pc & 0xFF00) | new_pcl as Word;
+
+                    let offset_is_negative = cpu.tmp8 & 0x80 != 0;
+                    let page_wrap = if offset_is_negative {
+                        cpu.tmp8 = 0xFF;
+                        new_pcl > old_pcl
+                    } else {
+                        cpu.tmp8 = 0x1;
+                        old_pcl > new_pcl
+                    };
+                    
+                    if page_wrap {
+                        StepCtl::Next
+                    } else {
+                        StepCtl::Skip
+                    }
+                },
+
+                // page correction cycle
+                // cpu.tmp8 holds carry value
+                |cpu, bus| {
+                    cpu.pc = cpu.pc.wrapping_add((cpu.tmp8 as Word) << 8);
+                    bus.read(cpu.pc);
+                    StepCtl::End
+                }
+            ]
+        }
+    };
+}
+
+pub static BEQ: Operation = branch!("BEQ", Status::ZERO, true);
+pub static BNE: Operation = branch!("BNE", Status::ZERO, false);
+
+pub static BCS: Operation = branch!("BCS", Status::CARRY, true);
+pub static BCC: Operation = branch!("BCC", Status::CARRY, false);
+
+pub static BMI: Operation = branch!("BMI", Status::NEGATIVE, true);
+pub static BPL: Operation = branch!("BPL", Status::NEGATIVE, false);
+
+pub static BVS: Operation = branch!("BVS", Status::OVERFLOW, true);
+pub static BVC: Operation = branch!("BVC", Status::OVERFLOW, false);
+
+macro_rules! reg_set {
+    // PUBLIC INTERFACES
+    ($name:literal, $to:ident <- sp) => {
+        reg_set!(@impl $name, $to, |cpu: &mut CPUCore| cpu.sp.value)
+    };
+
+    ($name:literal, $to:ident <- $from:ident) => {
+        reg_set!(@impl $name, $to, |cpu: &mut CPUCore| cpu.$from)
+    };
+
+
+    ($name:literal, $to:ident <- $r:ident + 1) => {
+        reg_set!(@impl $name, $to, |cpu: &mut CPUCore| cpu.$r.wrapping_add(1))
+    };
+
+    ($name:literal, $to:ident <- $r:ident - 1) => {
+        reg_set!(@impl $name, $to, |cpu: &mut CPUCore| cpu.$r.wrapping_sub(1))
+    };
+
+    // INTERNAL IMPLEMENTATION
+    (@impl $name:literal, $to:ident, $rhs:expr) => {
+        Operation {
+            name: $name,
+            valid_modes: AddressingModeFlag::IMPLIED,
+            typ: OperationType::Register,
+            micro: &[
+                |cpu, _bus| {
+                    cpu.$to = ($rhs)(cpu);
+                    cpu.flags.set_nz(cpu.$to);
+                    StepCtl::End
+                }
+            ]
+        }
+    };
+}
+
+
+macro_rules! flag {
+    // INTERNAL IMPLEMENTATION
+    (@impl $name:literal, $op:ident, $flag:ident) => {
+        Operation {
+            name: $name,
+            valid_modes: AddressingModeFlag::IMPLIED,
+            typ: OperationType::Register,
+            micro: &[
+                |cpu, _bus| {
+                    cpu.flags.$op(Status::$flag);
+                    StepCtl::End
+                }
+            ]
+        }
+    };
+
+    // PUBLIC INTERFACES 
+    ($name:literal, set $flag:ident) => {
+        flag!(@impl $name, insert, $flag)
+    };
+
+    ($name:literal, clear $flag:ident) => {
+        flag!(@impl $name, remove, $flag)
+    };
+}
+
+macro_rules! stack {
+    // PUSH INTERFACE
+    ($name:literal, push a) => {
+        stack!(@push $name, |cpu: &mut CPUCore| cpu.a)
+    };
+
+    ($name:literal, push p) => {
+        // Set UNUSED & BREAK in pushed status byte
+        stack!(@push $name, |cpu: &mut CPUCore| cpu.flags.bits() | 0x30)
+    };
+
+    // PULL INTERFACE
+    ($name:literal, pull a) => {
+        stack!(@pull $name, |cpu: &mut CPUCore, v: Byte| {
+            cpu.a = v;
+            cpu.flags.set_nz(cpu.a);
+        })
+    };
+
+    ($name:literal, pull p) => {
+        stack!(@pull $name, |cpu: &mut CPUCore, v: Byte| {
+            cpu.flags = Status::from_bits_retain(v);
+            cpu.flags.insert(Status::UNUSED);
+        })
+    };
+
+    // INTERNAL PUSH IMPLEMENTATION
+    (@push $name:literal, $value:expr) => {
+        Operation {
+            name: $name,
+            valid_modes: AddressingModeFlag::IMPLIED,
+            typ: OperationType::Register,
+            micro: &[
+                // cycle 1: dummy read (opcode fetch already done)
+                |_, _| StepCtl::Next,
+
+                // cycle 2: write to stack
+                |cpu, bus| {
+                    let v: Byte = ($value)(cpu);
+                    bus.write(cpu.sp.to_word(), v);
+                    cpu.sp.decrement();
+                    StepCtl::End
+                }
+            ]
+        }
+    };
+
+    // INTERNAL PULL IMPLEMENTATION
+    (@pull $name:literal, $assign:expr) => {
+        Operation {
+            name: $name,
+            valid_modes: AddressingModeFlag::IMPLIED,
+            typ: OperationType::Register,
+            micro: &[
+                // cycle 1: dummy read
+                |_cpu, _bus| StepCtl::Next,
+
+                // cycle 2: increment SP
+                |cpu, bus| {
+                    bus.read(cpu.sp.to_word());
+                    cpu.sp.increment();
+                    StepCtl::Next
+                },
+
+                // cycle 3: read from stack
+                |cpu, bus| {
+                    let v = bus.read(cpu.sp.to_word());
+                    ($assign)(cpu, v);
+                    StepCtl::End
+                }
+            ]
+        }
+    };
+}
+
+pub static PHA: Operation = stack!("PHA", push a);
+pub static PHP: Operation = stack!("PHP", push p);
+pub static PLA: Operation = stack!("PLA", pull a);
+pub static PLP: Operation = stack!("PLP", pull p);
+
+pub static CLC: Operation = flag!("CLC", clear CARRY);
+pub static SEC: Operation = flag!("SEC", set CARRY);
+pub static CLI: Operation = flag!("CLI", clear IRQ_DISABLE);
+pub static SEI: Operation = flag!("SEI", set IRQ_DISABLE);
+pub static CLV: Operation = flag!("CLV", clear OVERFLOW);
+pub static CLD: Operation = flag!("CLD", clear DECIMAL);
+pub static SED: Operation = flag!("SED", set DECIMAL);
+
+pub static DEY: Operation = reg_set!("DEY", y <- y-1);
+pub static INY: Operation = reg_set!("INY", y <- y+1);
+pub static INX: Operation = reg_set!("INX", x <- x+1);
+pub static DEX: Operation = reg_set!("DEX", x <- x-1);
+pub static TAY: Operation = reg_set!("TAY", y <- a);
+pub static TYA: Operation = reg_set!("TYA", y <- a);
+pub static TXA: Operation = reg_set!("TXA", a <- x);
+pub static TAX: Operation = reg_set!("TAX", x <- a);
+pub static TSX: Operation = reg_set!("TSX", x <- sp);
+
+// reg_set! macro isn't used because TXS doesn't set NZ flags like others
+pub static TXS: Operation = Operation {
+    name: "TXS",
+    valid_modes: AddressingModeFlag::IMPLIED,
+    typ: OperationType::Register,
+    micro: &[
+        |cpu, _bus| {
+            cpu.sp.value = cpu.x;
+            StepCtl::End
+        } 
+    ]
+};
+
 /* --- INTERRUPTS --- */
 // Adapted from https://www.pagetable.com/?p=410
 pub static RESET: Operation = Operation {
@@ -832,7 +1077,6 @@ pub static RESET: Operation = Operation {
         // Also disable interrupts and clear decimal flag
         |cpu, bus| {
             cpu.flags.set(Status::IRQ_DISABLE, true);
-            cpu.flags.set(Status::DECIMAL, false);
 
             let lo = bus.read(0xFFFC);
             cpu.tmp8 = lo;
@@ -840,7 +1084,6 @@ pub static RESET: Operation = Operation {
         },
         // Cycle 7: fetch high byte of RESET vector at $FFFD
         |cpu, bus| {
-            cpu.flags.set(Status::BREAK, true);
             let hi = bus.read(0xFFFD);
             cpu.pc = Word::from_le_bytes([cpu.tmp8, hi]);
             StepCtl::End

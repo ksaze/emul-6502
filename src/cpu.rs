@@ -5,21 +5,22 @@ use crate::variants::{ALUVariant, Decoder};
 
 use bitflags::bitflags;
 
-pub struct StackPointer(pub Byte);
+pub struct StackPointer {
+    pub value: Byte,
+}
 
 impl StackPointer {
     #[must_use]
     pub const fn to_word(&self) -> Word {
-        let sp_value = self.0;
-        Word::from_le_bytes([sp_value, 0x01])
+        Word::from_le_bytes([self.value, 0x01])
     }
 
     pub const fn decrement(&mut self) {
-        self.0 = self.0.wrapping_sub(1);
+        self.value = self.value.wrapping_sub(1);
     }
 
     pub const fn increment(&mut self) {
-        self.0 = self.0.wrapping_add(1);
+        self.value = self.value.wrapping_add(1);
     }
 }
 
@@ -30,7 +31,7 @@ bitflags! {
         const ZERO      = 0b0000_0010; // Z
         const IRQ_DISABLE = 0b0000_0100; // I
         const DECIMAL   = 0b0000_1000; // D
-        const BREAK    = 0b0001_0000; // B
+        // bit 4: B flag is phantom
         const UNUSED   = 0b0010_0000; // always set on 6502
         const OVERFLOW = 0b0100_0000; // V
         const NEGATIVE = 0b1000_0000; // N
@@ -156,7 +157,7 @@ impl<V: Decoder + ALUVariant> CPU<V> {
         CPU {
             core: CPUCore {
                 pc: 0,
-                sp: StackPointer(0),
+                sp: StackPointer { value: 0 },
                 a: 0,
                 x: 0,
                 y: 0,
