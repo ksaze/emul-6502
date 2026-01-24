@@ -190,28 +190,28 @@ impl<V: Decoder + ALUVariant> CPU<V> {
             return;
         }
 
-        // --- Fetch & Decode Opcode Phase
-        if self.core.ready {
-            let opcode = bus.read(self.core.pc);
-            self.core.pc = self.core.pc.wrapping_add(1);
-            self.core.ir = opcode;
-
-            let instr = self.decoder.decode(opcode).unwrap_or_else(|| {
-                panic!(
-                    "Decode failed for opcode: ${:02X} at PC=${:04X}",
-                    opcode,
-                    self.core.pc.wrapping_sub(1)
-                )
-            });
-
-            self.core.instr = instr;
-            self.core.micro_iter = Some(self.core.instr.pipeline());
-            self.core.ready = false;
-            return;
-        }
-
-        // --- Execute Micro-op Phase
         loop {
+            // --- Fetch & Decode Opcode Phase
+            if self.core.ready {
+                let opcode = bus.read(self.core.pc);
+                self.core.pc = self.core.pc.wrapping_add(1);
+                self.core.ir = opcode;
+
+                let instr = self.decoder.decode(opcode).unwrap_or_else(|| {
+                    panic!(
+                        "Decode failed for opcode: ${:02X} at PC=${:04X}",
+                        opcode,
+                        self.core.pc.wrapping_sub(1)
+                    )
+                });
+
+                self.core.instr = instr;
+                self.core.micro_iter = Some(self.core.instr.pipeline());
+                self.core.ready = false;
+                return;
+            }
+
+            // --- Execute Micro-op Phase
             // Fetch micro-op
             let micro = {
                 let iter = match &mut self.core.micro_iter {

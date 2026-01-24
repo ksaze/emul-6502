@@ -224,6 +224,21 @@ fn decode_sb2(op: Byte) -> Option<Instruction> {
     Some(Instruction::new(addr, opn))
 }
 
+fn decode_sbr_and_int(op: Byte) -> Option<Instruction> {
+    let (addr, opn) = match hnibble(op) {
+        0x0 => (&NONE, &BRK),
+        // JSR is absolute but addressing is interleaved in the operation cycles
+        // Thus in this case JSR owns the addressing mode inside its operation
+        // This fixed in later version, hence conditionally altering the abs microps is dismissed
+        0x2 => (&NONE, &JSR),
+        0x4 => (&IMPLIED, &RTI),
+        0x6 => (&IMPLIED, &RTS),
+        _ => return None,
+    };
+
+    Some(Instruction::new(addr, opn))
+}
+
 fn set_binarymode_flags(cpu: &mut CPUCore, a: u16, m: u16, result: u16) {
     cpu.flags.set(Status::CARRY, result > 0xFF);
     cpu.flags
@@ -541,6 +556,10 @@ pub static NMOS_6502: Variant = Variant {
         DecodeRule {
             matches: |op| (op & 0x1F) == 0b100000,
             decode: decode_branch,
+        },
+        DecodeRule {
+            matches: |op| lnibble(op) == 0x0,
+            decode: decode_sbr_and_int,
         },
         DecodeRule {
             matches: |op| cc(op) == 0b01,

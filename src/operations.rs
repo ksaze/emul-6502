@@ -1,6 +1,4 @@
-use std::ops::{BitAnd, BitOr, BitXor};
-
-use bitflags::bitflags;
+use bitflags::{bitflags};
 
 use crate::bus::Bus;
 use crate::cpu::{ALUOuput, CPUCore, Status};
@@ -135,8 +133,8 @@ impl Instruction {
     pub fn new(addressing: &'static AddressingMode, operation: &'static Operation) -> Self {
         if !(operation.valid_modes.contains(addressing.flag)) {
             return Instruction {
-                name: String::from("NOP"),
-                addressing: &IMPLIED,
+                name: format!("{} {}", "NOP", addressing.name),
+                addressing: addressing,
                 operation: &NOP,
             };
         }
@@ -144,7 +142,7 @@ impl Instruction {
         let name = if combine!(AddressingModeFlag::NONE, AddressingModeFlag::IMPLIED, AddressingModeFlag::RELATIVE).contains(addressing.flag) { 
             String::from(operation.name)
         } else {
-            format!("{}_{}", addressing.name, operation.name)
+            format!("{} {}", operation.name, addressing.name)
         };
 
         Instruction {
@@ -161,13 +159,6 @@ impl Instruction {
         self.addressing.micro.iter().chain(self.operation.micro.iter())
     }
 }
-
-static EMPTY_MICROOP: MicroOp = |_cpu, _bus| StepCtl::Next;
-
-static DUMMY_READ: MicroOp = |_cpu, bus| {
-    bus.read(0x00FF);
-    StepCtl::Next
-};
 
 static READ_LO_BYTE: MicroOp = |cpu, bus| {
     cpu.tmp8 = bus.read(cpu.pc);
@@ -199,7 +190,7 @@ pub static IMPLIED: AddressingMode = AddressingMode {
 };
 
 pub static ACCUMULATOR: AddressingMode = AddressingMode {
-    name: "ACCUMULATOR",
+    name: "A",
     flag: AddressingModeFlag::ACCUMULATOR,
     micro: &[|cpu, bus| {
         bus.read(cpu.pc);
@@ -209,7 +200,7 @@ pub static ACCUMULATOR: AddressingMode = AddressingMode {
 };
 
 pub static IMMEDIATE: AddressingMode = AddressingMode {
-    name: "IMMEDIATE",
+    name: "#imm",
     flag: AddressingModeFlag::IMMEDIATE,
     micro: &[|cpu, bus| {
         if cpu.instr.operation.typ == OperationType::Store {
@@ -223,7 +214,7 @@ pub static IMMEDIATE: AddressingMode = AddressingMode {
 };
 
 pub static ZERO_PAGE: AddressingMode = AddressingMode {
-    name: "ZERO_PAGE",
+    name: "zp",
     flag: AddressingModeFlag::ZERO_PAGE,
     #[rustfmt::skip]
     micro: &[
@@ -241,7 +232,7 @@ pub static ZERO_PAGE: AddressingMode = AddressingMode {
 };
 
 pub static RELATIVE: AddressingMode = AddressingMode {
-    name: "RELATIVE",
+    name: "offset",
     flag: AddressingModeFlag::RELATIVE,
     micro: &[|cpu, bus| {
         cpu.tmp8 = bus.read(cpu.pc);
@@ -251,7 +242,7 @@ pub static RELATIVE: AddressingMode = AddressingMode {
 };
 
 pub static ZERO_PAGE_X: AddressingMode = AddressingMode {
-    name: "ZERO_PAGE_X",
+    name: "zp,X",
     flag: AddressingModeFlag::ZERO_PAGE_X,
     micro: &[
         READ_LO_BYTE,
@@ -273,7 +264,7 @@ pub static ZERO_PAGE_X: AddressingMode = AddressingMode {
 };
 
 pub static ZERO_PAGE_Y: AddressingMode = AddressingMode {
-    name: "ZERO_PAGE_Y",
+    name: "zp,Y",
     flag: AddressingModeFlag::ZERO_PAGE_Y,
     micro: &[
         READ_LO_BYTE,
@@ -295,7 +286,7 @@ pub static ZERO_PAGE_Y: AddressingMode = AddressingMode {
 };
 
 pub static ABSOLUTE: AddressingMode = AddressingMode {
-    name: "ABSOLUTE",
+    name: "abs",
     flag: AddressingModeFlag::ABSOLUTE,
     #[rustfmt::skip]
     micro: &[
@@ -303,6 +294,7 @@ pub static ABSOLUTE: AddressingMode = AddressingMode {
         |cpu, bus| {
             cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.pc)]);
             cpu.pc = cpu.pc.wrapping_add(1);
+            // for JMP 
             if cpu.instr.operation.typ == OperationType::Control {
                 StepCtl::SkipMerge
             } else { StepCtl::Next}
@@ -319,7 +311,7 @@ pub static ABSOLUTE: AddressingMode = AddressingMode {
 };
 
 pub static ABS_IND: AddressingMode = AddressingMode {
-    name: "ABS_IND",
+    name: "(abs)",
     flag: AddressingModeFlag::ABS_IND,
     #[rustfmt::skip]
     micro: &[
@@ -352,7 +344,7 @@ pub static ABS_IND: AddressingMode = AddressingMode {
 };
 
 pub static ABSOLUTE_X: AddressingMode = AddressingMode {
-    name: "ABSOLUTE_X",
+    name: "abs,X",
     flag: AddressingModeFlag::ABSOLUTE_X,
     #[rustfmt::skip]
     micro: &[
@@ -389,7 +381,7 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
 };
 
 pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
-    name: "ABSOLUTE_Y",
+    name: "abs,Y",
     flag: AddressingModeFlag::ABSOLUTE_Y,
     #[rustfmt::skip]
     micro: &[
@@ -426,7 +418,7 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
 };
 
 pub static IDX_IND: AddressingMode = AddressingMode {
-    name: "IDX_IND",
+    name: "(zp,X)",
     flag: AddressingModeFlag::IDX_IND,
     micro: &[
         READ_LO_BYTE,
@@ -455,7 +447,7 @@ pub static IDX_IND: AddressingMode = AddressingMode {
 };
 
 pub static IND_IDX: AddressingMode = AddressingMode {
-    name: "IND_IDX",
+    name: "(zp),X",
     flag: AddressingModeFlag::IND_IDX,
     micro: &[
         READ_LO_BYTE,
@@ -989,16 +981,92 @@ pub static TXS: Operation = Operation {
     ]
 };
 
+/* --- SUBROUTINE --- */
+pub static JSR: Operation = Operation {
+    name: "JSR abs",
+    valid_modes: AddressingModeFlag::NONE,
+    typ: OperationType::Control,
+    micro: &[
+        READ_LO_BYTE,
+        |_cpu, _bus| {
+            // For return address, the address of next instruction - 1 is pushed
+            // Buffer ADL
+            StepCtl::Next
+        },
+
+        |cpu, bus| {
+            bus.write(cpu.sp.to_word(), (cpu.pc >> 8) as Byte);
+            cpu.sp.decrement();
+            StepCtl::Next
+        },
+
+        |cpu, bus| {
+            bus.write(cpu.sp.to_word(), (cpu.pc & 0xFF) as Byte);
+            cpu.sp.decrement();
+            StepCtl::Next
+        },
+
+        |cpu, bus| {
+            cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.pc)]);
+            // Merge with instruction fetch
+            cpu.ready = true;
+            StepCtl::Merge
+        },
+    ],
+};
+
+pub static RTS: Operation = Operation {
+    name: "RTS",
+    valid_modes: AddressingModeFlag::IMPLIED,
+    typ: OperationType::Control,
+    micro: &[
+        // cycle 2: dummy read handled by implied addressing mode already, skip to next cycle
+        |_cpu, _bus| StepCtl::Next,
+
+        // cycle 3: increment sp
+        |cpu, bus| {
+            bus.read(cpu.sp.to_word());
+            cpu.sp.increment();
+            StepCtl::Next
+        },
+
+        // cycle 4: pull PCL
+        |cpu, bus| {
+            cpu.tmp8 = bus.read(cpu.sp.to_word());
+            cpu.sp.increment();
+            StepCtl::Next
+        },
+
+        // cycle 5: pull PCH
+        |cpu, bus| {
+            cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.sp.to_word())]);
+            StepCtl::Next
+        },
+
+        // cycle 6: increment PC to next instruction
+        |cpu, bus| {
+            cpu.pc = cpu.tmp16; bus.read(cpu.pc); cpu.pc = cpu.pc.wrapping_add(1); StepCtl::End
+        }
+    ],
+};
+
 /* --- INTERRUPTS --- */
 // Adapted from https://www.pagetable.com/?p=410
+// Goes through the operations of BRK but doesn't perform any actual writes
+// Instead bus pin is set to read, resulting in fake stack pushes of PCH, PCL, and P
 pub static RESET: Operation = Operation {
     name: "RESET",
     valid_modes: AddressingModeFlag::NONE,
     typ: OperationType::Interrupt,
     micro: &[
-        // Cycle 1 & 2: Internal Cycles
-        DUMMY_READ,
-        DUMMY_READ,
+        |_cpu, bus| {
+            bus.read(bus.addr_bus);
+            StepCtl::Next
+        },
+        |_cpu, bus| {
+            bus.read(bus.addr_bus.wrapping_add(1));
+            StepCtl::Next
+        },
         // Cycle 3: fake stack push of PCH -> actually a READ from 0x0100+SP
         |cpu, bus| {
             let addr = 0x0100u16.wrapping_add(cpu.sp.to_word());
@@ -1021,20 +1089,147 @@ pub static RESET: Operation = Operation {
             StepCtl::Next
         },
         // Cycle 6: fetch low byte of RESET vector at $FFFC
-        // Also disable interrupts and clear decimal flag
         |cpu, bus| {
-            cpu.flags.set(Status::IRQ_DISABLE, true);
+            cpu.flags.insert(Status::IRQ_DISABLE);
+            cpu.flags.remove(Status::DECIMAL);
+            cpu.flags.insert(Status::UNUSED);
 
-            let lo = bus.read(0xFFFC);
-            cpu.tmp8 = lo;
+            cpu.tmp8 = bus.read(0xFFFC);
             StepCtl::Next
         },
         // Cycle 7: fetch high byte of RESET vector at $FFFD
         |cpu, bus| {
-            let hi = bus.read(0xFFFD);
-            cpu.pc = Word::from_le_bytes([cpu.tmp8, hi]);
+            cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(0xFFFD)]);
             StepCtl::End
         },
         // Cycle 8: fetch first opcode & decode
     ],
 };
+
+pub static RTI: Operation = Operation {
+    name: "RTI",
+    valid_modes: AddressingModeFlag::IMPLIED,
+    typ: OperationType::Control,
+    micro: &[
+        // cycle 2: dummy read handled by implied addressing mode already, skip to next cycle
+        |_cpu, _bus| StepCtl::Next,
+
+        // cycle 3: increment sp
+        |cpu, bus| {
+            bus.read(cpu.sp.to_word());
+            cpu.sp.increment();
+            StepCtl::Next
+        },
+
+        |cpu, bus| {
+            cpu.flags = Status::from_bits_truncate(bus.read(cpu.sp.to_word()));
+            cpu.flags.insert(Status::UNUSED);
+            cpu.sp.increment();
+            StepCtl::Next
+        },
+
+        // cycle 4: pull PCL
+        |cpu, bus| {
+            cpu.tmp8 = bus.read(cpu.sp.to_word());
+            cpu.sp.increment();
+            StepCtl::Next
+        },
+
+        // cycle 5: pull PCH
+        |cpu, bus| {
+            cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.sp.to_word())]);
+            StepCtl::Next
+        },
+    ],
+};
+
+macro_rules! interrupt {
+    (
+        $name:literal,
+        vector = $vector:expr,
+        push_b = $push_b:expr,
+        prefetch = $prefetch:expr
+    ) => {
+        Operation {
+            name: $name,
+            valid_modes: AddressingModeFlag::NONE,
+            typ: OperationType::Interrupt,
+
+            micro: &[
+                // optional padding fetch (BRK only)
+                |cpu, bus| {
+                    if $prefetch {
+                        bus.read(cpu.pc);
+                        cpu.pc = cpu.pc.wrapping_add(1);
+                        StepCtl::Next
+                    } else {
+                        StepCtl::Merge
+                    }
+                },
+
+                // push PCH
+                |cpu, bus| {
+                    bus.write(cpu.sp.to_word(), cpu.pc.to_le_bytes()[1]);
+                    cpu.sp.decrement();
+                    StepCtl::Next
+                },
+
+                // push PCL
+                |cpu, bus| {
+                    bus.write(cpu.sp.to_word(), cpu.pc.to_le_bytes()[0]);
+                    cpu.sp.decrement();
+                    StepCtl::Next
+                },
+
+                // push P
+                |cpu, bus| {
+                    let mut p = cpu.flags.bits();
+                    p |= 0b0010_0000; // bit 5 always set
+
+                    if $push_b {
+                        p |= 0b0001_0000;
+                    } else {
+                        p &= !0b0001_0000;
+                    }
+
+                    bus.write(cpu.sp.to_word(), p);
+                    cpu.flags.insert(Status::IRQ_DISABLE);
+                    StepCtl::Next
+                },
+
+                // vector low
+                |cpu, bus| {
+                    cpu.tmp8 = bus.read($vector);
+                    StepCtl::Next
+                },
+
+                // vector high
+                |cpu, bus| {
+                    cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read($vector + 1)]);
+                    StepCtl::End
+                },
+            ],
+        }
+    };
+}
+
+pub static BRK: Operation = interrupt!(
+    "BRK",
+    vector = 0xFFFE,
+    push_b = true,
+    prefetch = true
+);
+
+pub static IRQ: Operation = interrupt!(
+    "IRQ",
+    vector = 0xFFFE,
+    push_b = false,
+    prefetch = false
+);
+
+pub static NMI: Operation = interrupt!(
+    "NMI",
+    vector = 0xFFFA,
+    push_b = false,
+    prefetch = false
+);

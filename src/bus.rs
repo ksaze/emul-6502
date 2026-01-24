@@ -99,7 +99,8 @@ pub enum BusOp {
 pub struct Bus {
     mappings: Vec<BusMapping>,
     last_op: BusOp,
-    data_bus: Byte,
+    pub data_bus: Byte,
+    pub addr_bus: Word,
     rdy: bool,
 }
 
@@ -108,7 +109,8 @@ impl Bus {
         Self {
             mappings: Vec::new(),
             last_op: BusOp::Internal,
-            data_bus: 0xFF,
+            data_bus: 0x0,
+            addr_bus: 0x0,
             rdy: true,
         }
     }
@@ -131,6 +133,7 @@ impl Bus {
         if let Some(map) = self.find_device_mut(addr) {
             let val = map.device.read(map.offset(addr));
             self.data_bus = val;
+            self.addr_bus = addr;
             val
         } else {
             self.data_bus
@@ -140,6 +143,7 @@ impl Bus {
     pub fn write(&mut self, addr: Word, val: Byte) {
         self.last_op = BusOp::Write(addr, val);
         self.data_bus = val;
+        self.addr_bus = addr;
 
         if let Some(map) = self.find_device_mut(addr) {
             map.device.write(map.offset(addr), val);
