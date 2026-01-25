@@ -1,5 +1,5 @@
-use crate::bus::{Bus, MemoryDevice};
-use crate::cpu::CPU;
+use crate::bus::{Bus, BusOp, MemoryDevice};
+use crate::cpu::{CPU, CPUState};
 use crate::shared::*;
 use crate::variants::{ALUVariant, Decoder};
 
@@ -49,14 +49,15 @@ impl<V: Decoder + ALUVariant> Emulator<V> {
     pub fn reset_cpu(&mut self) {
         self.cpu.reset();
 
-        while !self.cpu.core.ready {
+        while self.cpu.core.state == CPUState::Exec {
             self.tick();
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> BusOp {
         self.cpu.tick(&mut self.bus);
-        let _bus_op = self.bus.tick();
+        let bus_op = self.bus.tick();
         self.cycles += 1;
+        bus_op
     }
 }

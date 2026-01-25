@@ -1,7 +1,7 @@
 use bitflags::{bitflags};
 
 use crate::bus::Bus;
-use crate::cpu::{ALUOuput, CPUCore, Status};
+use crate::cpu::{ALUOuput, CPUCore, CPUState, Status};
 use crate::shared::{Byte, Word};
 
 pub type MicroOp = for<'a, 'b> fn(&'a mut CPUCore, &'b mut Bus) -> StepCtl;
@@ -232,7 +232,7 @@ pub static ZERO_PAGE: AddressingMode = AddressingMode {
 };
 
 pub static RELATIVE: AddressingMode = AddressingMode {
-    name: "offset",
+    name: "rel",
     flag: AddressingModeFlag::RELATIVE,
     micro: &[|cpu, bus| {
         cpu.tmp8 = bus.read(cpu.pc);
@@ -351,7 +351,7 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
         READ_LO_BYTE,
         READ_HIGH_BYTE,
         |cpu, bus| {
-            cpu.tmp8 = (cpu.tmp16 >> 8) as Byte;
+            cpu.tmp8 = (cpu.tmp16 & 0xFF) as Byte;
             cpu.crossed = cpu.tmp8.wrapping_add(cpu.x) < cpu.tmp8;
             cpu.tmp16 = (cpu.tmp16 & 0xFF00) | (cpu.tmp8.wrapping_add(cpu.x) as Word);
             
@@ -362,19 +362,26 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
 
-            if cpu.crossed {
+            if cpu.crossed || cpu.instr.operation.typ == OperationType::RMW {
                 StepCtl::Next
+            } else if !cpu.crossed && cpu.instr.operation.typ == OperationType::Store {
+                // read already done this cycle. Next cycle required for store
+                StepCtl::Skip
             } else {
                 StepCtl::SkipMerge
             }
         },
         |cpu, bus| {
-            // Fix high byte
-            cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
+            if cpu.crossed {
+                // Fix high byte
+                cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
+            }
             if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
+
+            cpu.crossed = false;
             StepCtl::Merge
         },
     ],
@@ -388,7 +395,7 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
         READ_LO_BYTE,
         READ_HIGH_BYTE,
         |cpu, bus| {
-            cpu.tmp8 = (cpu.tmp16 >> 8) as Byte;
+            cpu.tmp8 = (cpu.tmp16 & 0xFF) as Byte;
             cpu.crossed = cpu.tmp8.wrapping_add(cpu.y) < cpu.tmp8;
             cpu.tmp16 = (cpu.tmp16 & 0xFF00) | (cpu.tmp8.wrapping_add(cpu.y) as Word);
 
@@ -399,19 +406,26 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
 
-            if cpu.crossed {
+            if cpu.crossed || cpu.instr.operation.typ == OperationType::RMW {
                 StepCtl::Next
+            } else if !cpu.crossed && cpu.instr.operation.typ == OperationType::Store {
+                // read already done this cycle. Next cycle required for store
+                StepCtl::Skip
             } else {
                 StepCtl::SkipMerge
             }
         },
         |cpu, bus| {
-            // Fix high byte
-            cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
+            if cpu.crossed {
+                    // Fix high byte
+                    cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
+            }
             if cpu.instr.operation.typ == OperationType::Store {} 
             else {
                 cpu.tmp8 = bus.read(cpu.tmp16);
             }
+
+            cpu.crossed = false;
             StepCtl::Merge
         },
     ],
@@ -447,7 +461,7 @@ pub static IDX_IND: AddressingMode = AddressingMode {
 };
 
 pub static IND_IDX: AddressingMode = AddressingMode {
-    name: "(zp),X",
+    name: "(zp),Y",
     flag: AddressingModeFlag::IND_IDX,
     micro: &[
         READ_LO_BYTE,
@@ -461,7 +475,7 @@ pub static IND_IDX: AddressingMode = AddressingMode {
             StepCtl::Next
         },
         |cpu, bus| {
-            cpu.tmp8 = (cpu.tmp16 >> 8) as Byte;
+            cpu.tmp8 = (cpu.tmp16 & 0xFF) as Byte;
             cpu.crossed = cpu.tmp8.wrapping_add(cpu.y) < cpu.tmp8;
             cpu.tmp16 = (cpu.tmp16 & 0xFF00) | (cpu.tmp8.wrapping_add(cpu.y) as Word);
 
@@ -472,6 +486,9 @@ pub static IND_IDX: AddressingMode = AddressingMode {
 
             if cpu.crossed {
                 StepCtl::Next
+            } else if !cpu.crossed && cpu.instr.operation.typ == OperationType::Store {
+                // read already done this cycle. Next cycle required for store
+                StepCtl::Skip
             } else {
                 StepCtl::SkipMerge
             }
@@ -491,15 +508,28 @@ pub static IND_IDX: AddressingMode = AddressingMode {
 /* --- Misc Operation --- */
 pub static NOP: Operation = Operation {
     name: "NOP",
-        valid_modes: combine!(
-            AddressingModeFlag::IMPLIED,
-            AddressingModeFlag::IMMEDIATE,
-            AddressingModeFlag::ZERO_PAGE, 
-            AddressingModeFlag::ZERO_PAGE_X, 
-            AddressingModeFlag::ABSOLUTE, 
-            AddressingModeFlag::ABSOLUTE_X),
+    valid_modes: combine!(
+        AddressingModeFlag::IMPLIED,
+        AddressingModeFlag::IMMEDIATE,
+        AddressingModeFlag::ZERO_PAGE, 
+        AddressingModeFlag::ZERO_PAGE_X, 
+        AddressingModeFlag::ABSOLUTE, 
+        AddressingModeFlag::ABSOLUTE_X),
     typ: OperationType::Timing,
     micro: &[],
+};
+
+pub static JAM: Operation = Operation {
+    name: "JAM",
+    valid_modes: AddressingModeFlag::NONE,
+    typ: OperationType::Timing,
+    micro: &[
+        |cpu, bus| {
+            bus.read(cpu.pc.wrapping_add(1));
+            cpu.state = CPUState::Jammed;
+            StepCtl::Next
+        }
+    ]
 };
 
 /* --- Group 1  --- */
@@ -716,7 +746,8 @@ pub static BIT: Operation = Operation {
     typ: OperationType::Read,
     micro: &[
         |cpu, _bus| {
-            cpu.flags.set_nz(cpu.a & cpu.tmp8);
+            cpu.flags.set(Status::ZERO, cpu.tmp8 & cpu.a == 0);
+            cpu.flags.set(Status::NEGATIVE, cpu.tmp8 & 0x80 != 0);
             // V Flag => Copy bit 6 from memory
             cpu.flags.set(Status::OVERFLOW, cpu.tmp8 & 0x40 != 0);
             StepCtl::End
@@ -784,8 +815,8 @@ macro_rules! branch {
                 // page correction cycle
                 // cpu.tmp8 holds carry value
                 |cpu, bus| {
-                    cpu.pc = cpu.pc.wrapping_add((cpu.tmp8 as Word) << 8);
                     bus.read(cpu.pc);
+                    cpu.pc = cpu.pc.wrapping_add((cpu.tmp8 as Word) << 8);
                     StepCtl::End
                 }
             ]
@@ -891,7 +922,7 @@ macro_rules! stack {
 
     ($name:literal, pull p) => {
         stack!(@pull $name, |cpu: &mut CPUCore, v: Byte| {
-            cpu.flags = Status::from_bits_retain(v);
+            cpu.flags = Status::from_bits_truncate(v);
             cpu.flags.insert(Status::UNUSED);
         })
     };
@@ -963,7 +994,7 @@ pub static INY: Operation = reg_set!("INY", y <- y+1);
 pub static INX: Operation = reg_set!("INX", x <- x+1);
 pub static DEX: Operation = reg_set!("DEX", x <- x-1);
 pub static TAY: Operation = reg_set!("TAY", y <- a);
-pub static TYA: Operation = reg_set!("TYA", y <- a);
+pub static TYA: Operation = reg_set!("TYA", a <- y);
 pub static TXA: Operation = reg_set!("TXA", a <- x);
 pub static TAX: Operation = reg_set!("TAX", x <- a);
 pub static TSX: Operation = reg_set!("TSX", x <- sp);
@@ -988,9 +1019,10 @@ pub static JSR: Operation = Operation {
     typ: OperationType::Control,
     micro: &[
         READ_LO_BYTE,
-        |_cpu, _bus| {
+        |cpu, bus| {
             // For return address, the address of next instruction - 1 is pushed
             // Buffer ADL
+            bus.read(cpu.sp.to_word());
             StepCtl::Next
         },
 
@@ -1008,9 +1040,7 @@ pub static JSR: Operation = Operation {
 
         |cpu, bus| {
             cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.pc)]);
-            // Merge with instruction fetch
-            cpu.ready = true;
-            StepCtl::Merge
+            StepCtl::Next
         },
     ],
 };
@@ -1091,7 +1121,6 @@ pub static RESET: Operation = Operation {
         // Cycle 6: fetch low byte of RESET vector at $FFFC
         |cpu, bus| {
             cpu.flags.insert(Status::IRQ_DISABLE);
-            cpu.flags.remove(Status::DECIMAL);
             cpu.flags.insert(Status::UNUSED);
 
             cpu.tmp8 = bus.read(0xFFFC);
@@ -1193,6 +1222,7 @@ macro_rules! interrupt {
                     }
 
                     bus.write(cpu.sp.to_word(), p);
+                    cpu.sp.decrement();
                     cpu.flags.insert(Status::IRQ_DISABLE);
                     StepCtl::Next
                 },

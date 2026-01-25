@@ -1,5 +1,8 @@
 # 6502 Emulator in Rust
 
+/tests/singlestep.rs uses [SingleStepTests](https://github.com/SingleStepTests/ProcessorTests/tree/main) for testing individual instructions.
+Variant NMOS_6502 passed all documented opcodes tests.
+
 ## References
 - MCS 6500 Microcomputer Family Programming Manual
 - https://llx.com/Neil/a2/opcodes.html

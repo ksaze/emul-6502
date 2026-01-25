@@ -145,8 +145,7 @@ fn decode_gr3(op: Byte) -> Option<Instruction> {
     };
 
     let opn = match aaa(op) {
-        0 => &BIT,
-        1 => &JMP,
+        1 => &BIT,
         2 => &JMP,
         3 => {
             if op == 0x6C {
@@ -268,7 +267,7 @@ static NMOS_ALU: ALUImpl = ALUImpl {
             // ---- low nibble ----
             let mut lo = (A & 0x0F) + (M & 0x0F) + carry;
             if lo > 9 {
-                lo += 6;
+                lo = lo.wrapping_add(6);
             }
             let half_carry = (lo > 0x0F) as u16;
 
@@ -282,7 +281,7 @@ static NMOS_ALU: ALUImpl = ALUImpl {
             // ---- final BCD correction ----
             let mut result = pre;
             if result > 0x9F {
-                result += 0x60;
+                result = result.wrapping_add(0x60);
             }
             cpu.flags.set(Status::CARRY, result > 0xFF);
 
@@ -296,37 +295,26 @@ static NMOS_ALU: ALUImpl = ALUImpl {
         let carry = cpu.flags.contains(Status::CARRY) as u16;
         let A = cpu.a as u16;
         let M = (value ^ 0xFF) as u16;
-        let binary_result = A + M + carry;
+        let mut result = A + M + carry;
 
-        if !cpu.flags.contains(Status::DECIMAL) {
-            set_binarymode_flags(cpu, A, M, binary_result);
-            ALUOuput::Done(binary_result as Byte)
-        } else {
-            // Z from 8-bit binary sum
-            cpu.flags.set(Status::ZERO, (binary_result & 0xFF) == 0);
+        // SBC flags come from binary result on NMOS
+        set_binarymode_flags(cpu, A, M, result);
 
-            // ---- low nibble ----
-            let mut lo = (A & 0x0F) + (M & 0x0F) + carry;
-            if lo <= 0x0F {
-                lo -= 6;
+        if cpu.flags.contains(Status::DECIMAL) {
+            let carry_out = result > 0xFF;
+
+            // if a carry propogated to bit 4
+            if ((A & 0x0F) + (M & 0x0F) + carry) <= 0x0F {
+                result = (result & 0xF0) | ((result + 0x0A) & 0x0F);
             }
-            let half_carry = (lo > 0x0F) as u16;
 
-            let pre = (A & 0xF0) + (M & 0xF0) + (half_carry << 4) + (lo & 0x0F);
-
-            // N and V from pre-adjust value
-            cpu.flags.set(Status::NEGATIVE, (pre & 0x80) != 0);
-            cpu.flags
-                .set(Status::OVERFLOW, (!(A ^ M) & (pre ^ A) & 0x80) != 0);
-
-            // ---- final BCD correction ----
-            let mut result = pre;
-            if result <= 0xFF {
-                result -= 0x60;
+            // high digit borrow (independent!)
+            if !carry_out {
+                result = result.wrapping_add(0xA0);
             }
-            cpu.flags.set(Status::CARRY, result > 0xFF);
-            ALUOuput::Done(result as Byte)
         }
+
+        ALUOuput::Done(result as u8)
     },
 
     ind_addr_inc: |addr| {
@@ -554,7 +542,7 @@ pub static NMOS_6502: Variant = Variant {
             decode: decode_sb2,
         },
         DecodeRule {
-            matches: |op| (op & 0x1F) == 0b100000,
+            matches: |op| (op & 0x1F) == 0x10,
             decode: decode_branch,
         },
         DecodeRule {
@@ -572,6 +560,11 @@ pub static NMOS_6502: Variant = Variant {
         DecodeRule {
             matches: |op| cc(op) == 0b00,
             decode: decode_gr3,
+        },
+        // If no rule matches including incompatible addr_mode & op is found, then JAM is triggered
+        DecodeRule {
+            matches: |_| true,
+            decode: |_| Some(Instruction::new(&NONE, &JAM)),
         },
     ],
     parent: None,

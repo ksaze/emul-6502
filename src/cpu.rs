@@ -42,7 +42,7 @@ impl Status {
     #[inline]
     pub fn set_nz(&mut self, value: Byte) {
         self.set(Status::ZERO, value == 0);
-        self.set(Status::NEGATIVE, value & 0x80 != 9);
+        self.set(Status::NEGATIVE, value & 0x80 != 0);
     }
 }
 
@@ -55,6 +55,14 @@ pub struct ALUImpl {
     pub adc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
     pub sbc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
     pub ind_addr_inc: fn(Word) -> ALUOuput<Word>,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum CPUState {
+    Ready,
+    Exec,
+    Blocked,
+    Jammed,
 }
 
 pub struct CPUCore {
@@ -77,7 +85,7 @@ pub struct CPUCore {
     pub micro_iter: Option<
         std::iter::Chain<std::slice::Iter<'static, MicroOp>, std::slice::Iter<'static, MicroOp>>,
     >,
-    pub ready: bool,
+    pub state: CPUState,
 }
 
 impl CPUCore {
@@ -172,7 +180,7 @@ impl<V: Decoder + ALUVariant> CPU<V> {
 
                 instr: Instruction::default(),
                 micro_iter: None,
-                ready: true,
+                state: CPUState::Ready,
             },
 
             decoder: variant,
@@ -182,17 +190,17 @@ impl<V: Decoder + ALUVariant> CPU<V> {
     pub fn reset(&mut self) {
         self.core.instr = Instruction::new(&NONE, &RESET);
         self.core.micro_iter = Some(self.core.instr.pipeline());
-        self.core.ready = false;
+        self.core.state = CPUState::Exec;
     }
 
     pub fn tick(&mut self, bus: &mut Bus) {
-        if !bus.rdy() {
-            return;
-        }
+        //         if !bus.rdy() {
+        //             return;
+        //         }
 
-        loop {
-            // --- Fetch & Decode Opcode Phase
-            if self.core.ready {
+        // --- Fetch & Decode Opcode Phase
+        match self.core.state {
+            CPUState::Ready => {
                 let opcode = bus.read(self.core.pc);
                 self.core.pc = self.core.pc.wrapping_add(1);
                 self.core.ir = opcode;
@@ -206,62 +214,75 @@ impl<V: Decoder + ALUVariant> CPU<V> {
                 });
 
                 self.core.instr = instr;
+                if self.core.instr.name.eq("JAM") {
+                     self.core.pc = self.core.pc.wrapping_sub(1);
+                 }
                 self.core.micro_iter = Some(self.core.instr.pipeline());
-                self.core.ready = false;
+                self.core.state = CPUState::Exec;
                 return;
             }
 
-            // --- Execute Micro-op Phase
-            // Fetch micro-op
-            let micro = {
-                let iter = match &mut self.core.micro_iter {
-                    Some(it) => it,
-                    None => {
-                        self.core.ready = true;
+            CPUState::Exec => {
+                loop {
+                    // --- Execute Micro-op Phase
+                    // Fetch micro-op
+                    let micro = {
+                        let iter = match &mut self.core.micro_iter {
+                            Some(it) => it,
+                            None => {
+                                self.core.state = CPUState::Ready;
+                                return;
+                            }
+                        };
+
+                        iter.next()
+                    };
+
+                    // If end of iterator, skip to next instruction
+                    let Some(micro) = micro else {
+                        self.core.state = CPUState::Ready;
+                        self.core.micro_iter = None;
                         return;
+                    };
+
+                    // Execute micro-op
+                    match micro(&mut self.core, bus) {
+                        StepCtl::Next => {
+                            break;
+                        }
+
+                        StepCtl::End => {
+                            self.core.state = CPUState::Ready;
+                            self.core.micro_iter = None;
+                            break;
+                        }
+
+                        StepCtl::Skip => {
+                            if let Some(iter) = &mut self.core.micro_iter {
+                                iter.next(); // skip fake stall micro-op
+                            }
+                            break;
+                        }
+
+                        StepCtl::Merge => {
+                            continue;
+                        }
+
+                        StepCtl::SkipMerge => {
+                            if let Some(iter) = &mut self.core.micro_iter {
+                                iter.next(); // skip fake stall micro-op
+                            }
+                            continue;
+                        }
                     }
-                };
-
-                iter.next()
-            };
-
-            // If end of iterator, skip to next instruction
-            let Some(micro) = micro else {
-                self.core.ready = true;
-                self.core.micro_iter = None;
-                return;
-            };
-
-            // Execute micro-op
-            match micro(&mut self.core, bus) {
-                StepCtl::Next => {
-                    break;
-                }
-
-                StepCtl::End => {
-                    self.core.ready = true;
-                    self.core.micro_iter = None;
-                    break;
-                }
-
-                StepCtl::Skip => {
-                    if let Some(iter) = &mut self.core.micro_iter {
-                        iter.next(); // skip fake stall micro-op
-                    }
-                    break;
-                }
-
-                StepCtl::Merge => {
-                    continue;
-                }
-
-                StepCtl::SkipMerge => {
-                    if let Some(iter) = &mut self.core.micro_iter {
-                        iter.next(); // skip fake stall micro-op
-                    }
-                    continue;
                 }
             }
+
+            CPUState::Jammed => {
+                bus.read(self.core.pc.wrapping_add(1));
+            }
+
+            _ => return,
         }
     }
 }

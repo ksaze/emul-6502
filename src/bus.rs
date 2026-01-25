@@ -91,7 +91,7 @@ impl BusMapping {
 
 #[derive(Clone, Copy)]
 pub enum BusOp {
-    Read(Word),
+    Read(Word, Byte),
     Write(Word, Byte),
     Internal,
 }
@@ -128,14 +128,14 @@ impl Bus {
     }
 
     pub fn read(&mut self, addr: Word) -> Byte {
-        self.last_op = BusOp::Read(addr);
-
         if let Some(map) = self.find_device_mut(addr) {
             let val = map.device.read(map.offset(addr));
             self.data_bus = val;
+            self.last_op = BusOp::Read(addr, val);
             self.addr_bus = addr;
             val
         } else {
+            self.last_op = BusOp::Read(addr, self.data_bus);
             self.data_bus
         }
     }
