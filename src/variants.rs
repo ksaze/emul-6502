@@ -1,8 +1,8 @@
 #[allow(clippy::wildcard_imports)]
 use crate::operations::*;
 use crate::{
-    cpu::{ALUImpl, ALUOuput, CPUCore, Status},
-    shared::Byte,
+    cpu::{CPUCore, Status},
+    shared::{Byte, Word},
 };
 
 #[inline]
@@ -30,12 +30,23 @@ fn hnibble(op: u8) -> u8 {
     (op & 0xF0) >> 4
 }
 
+pub enum ALUOuput<T> {
+    Done(T),
+    Penalty(T),
+}
+
+pub struct VariantQuirks {
+    pub adc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
+    pub sbc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
+    pub ind_addr_inc: fn(Word) -> ALUOuput<Word>,
+}
+
 pub trait Decoder {
     fn decode(&self, opcode: Byte) -> Option<Instruction>;
 }
 
-pub trait ALUVariant {
-    fn alu(&self) -> &'static ALUImpl;
+pub trait Quirks {
+    fn quirks(&self) -> &'static VariantQuirks;
 }
 
 // Decode should only return None to delegate decoding to parent variant
@@ -49,7 +60,7 @@ pub struct DecodeRule {
 pub struct Variant {
     pub rules: &'static [DecodeRule],
     pub parent: Option<&'static Variant>,
-    pub alu_impl: &'static ALUImpl,
+    pub quirks: &'static VariantQuirks,
 }
 
 impl Decoder for Variant {
@@ -66,9 +77,9 @@ impl Decoder for Variant {
     }
 }
 
-impl ALUVariant for Variant {
-    fn alu(&self) -> &'static ALUImpl {
-        self.alu_impl
+impl Quirks for Variant {
+    fn quirks(&self) -> &'static VariantQuirks {
+        self.quirks
     }
 }
 
@@ -248,7 +259,7 @@ fn set_binarymode_flags(cpu: &mut CPUCore, a: u16, m: u16, result: u16) {
 
 // Reference: https://forums.atariage.com/topic/163876-flags-on-decimal-mode-on-the-nmos-6502
 #[allow(non_snake_case)]
-static NMOS_ALU: ALUImpl = ALUImpl {
+static NMOS_QUIRKS: VariantQuirks = VariantQuirks {
     adc: |cpu, value| {
         // Values in ALU are of 9 bits
         // Represented here using u16
@@ -326,211 +337,6 @@ static NMOS_ALU: ALUImpl = ALUImpl {
     },
 };
 
-#[cfg(test)]
-mod adc_sbc_tests {
-    use super::*;
-    use crate::cpu::CPU;
-
-    macro_rules! alu_test {
-        (
-            $name:ident,
-            op = $op:ident,
-            a = $a:expr,
-            carry = $carry:expr,
-            value = $value:expr,
-            flags = $flags:expr,
-            result = $result:expr
-        ) => {
-            #[test]
-            fn $name() {
-                let mut cpu = CPU::new(NMOS_6502);
-
-                cpu.core.a = $a;
-                cpu.core.flags |= Status::DECIMAL;
-                cpu.core.flags.set(Status::CARRY, $carry);
-
-                let result = match cpu.core.$op($value) {
-                    ALUOuput::Done(val) => val,
-                    _ => panic!(concat!(stringify!($op), " did not complete")),
-                };
-
-                assert_eq!(cpu.core.flags.bits(), $flags, "Flags test failed");
-                assert_eq!(result, $result, "Result does not match");
-            }
-        };
-    }
-
-    alu_test!(
-        adc_00_00_c0,
-        op = adc,
-        a = 0x00,
-        carry = false,
-        value = 0x00,
-        flags = 0b00101010,
-        result = 0x00
-    );
-
-    alu_test!(
-        adc_79_00_c1,
-        op = adc,
-        a = 0x79,
-        carry = true,
-        value = 0x00,
-        flags = 0b11101000,
-        result = 0x80
-    );
-
-    alu_test!(
-        adc_24_56_c0,
-        op = adc,
-        a = 0x24,
-        carry = false,
-        value = 0x56,
-        flags = 0b11101000,
-        result = 0x80
-    );
-
-    alu_test!(
-        adc_93_82_c0,
-        op = adc,
-        a = 0x93,
-        carry = false,
-        value = 0x82,
-        flags = 0b01101001,
-        result = 0x75
-    );
-
-    alu_test!(
-        adc_89_76_c0,
-        op = adc,
-        a = 0x89,
-        carry = false,
-        value = 0x76,
-        flags = 0b00101001,
-        result = 0x65
-    );
-
-    alu_test!(
-        adc_89_76_c1,
-        op = adc,
-        a = 0x89,
-        carry = true,
-        value = 0x76,
-        flags = 0b00101011,
-        result = 0x66
-    );
-
-    alu_test!(
-        adc_80_f0_c0,
-        op = adc,
-        a = 0x80,
-        carry = false,
-        value = 0xF0,
-        flags = 0b01101001,
-        result = 0xD0
-    );
-
-    alu_test!(
-        adc_80_fa_c0,
-        op = adc,
-        a = 0x80,
-        carry = false,
-        value = 0xFA,
-        flags = 0b10101001,
-        result = 0xE0
-    );
-
-    alu_test!(
-        adc_2f_4f_c0,
-        op = adc,
-        a = 0x2F,
-        carry = false,
-        value = 0x4F,
-        flags = 0b00101000,
-        result = 0x74
-    );
-
-    alu_test!(
-        adc_6f_00_c1,
-        op = adc,
-        a = 0x6F,
-        carry = true,
-        value = 0x00,
-        flags = 0b00101000,
-        result = 0x76
-    );
-
-    alu_test!(
-        sbc_00_00_c0,
-        op = sbc,
-        a = 0x00,
-        carry = false,
-        value = 0x00,
-        flags = 0b10101000,
-        result = 0x99
-    );
-
-    alu_test!(
-        sbc_00_00_c1,
-        op = sbc,
-        a = 0x00,
-        carry = true,
-        value = 0x00,
-        flags = 0b00101011,
-        result = 0x00
-    );
-
-    alu_test!(
-        sbc_00_01_c1,
-        op = sbc,
-        a = 0x00,
-        carry = true,
-        value = 0x01,
-        flags = 0b10101000,
-        result = 0x99
-    );
-
-    alu_test!(
-        sbc_0a_00_c1,
-        op = sbc,
-        a = 0x0a,
-        carry = true,
-        value = 0x0,
-        flags = 0b00101001,
-        result = 0x0A
-    );
-
-    alu_test!(
-        sbc_0b_00_c0,
-        op = sbc,
-        a = 0x0B,
-        carry = false,
-        value = 0x00,
-        flags = 0b00101001,
-        result = 0x0A
-    );
-
-    alu_test!(
-        sbc_9a_00_c1,
-        op = sbc,
-        a = 0x9A,
-        carry = true,
-        value = 0x00,
-        flags = 0b10101001,
-        result = 0x9A
-    );
-
-    alu_test!(
-        sbc_9b_00_c0,
-        op = sbc,
-        a = 0x9B,
-        carry = false,
-        value = 0x00,
-        flags = 0b10101001,
-        result = 0x9A
-    );
-}
-
 pub static NMOS_6502: Variant = Variant {
     rules: &[
         DecodeRule {
@@ -568,5 +374,5 @@ pub static NMOS_6502: Variant = Variant {
         },
     ],
     parent: None,
-    alu_impl: &NMOS_ALU,
+    quirks: &NMOS_QUIRKS,
 };

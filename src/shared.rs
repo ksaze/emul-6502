@@ -1,9 +1,12 @@
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
+use std::rc::Rc;
 
 pub type Word = u16;
 pub type Byte = u8;
+pub type SharedDevice<T> = Rc<RefCell<T>>;
 
 pub fn read_file<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let path = path.as_ref();

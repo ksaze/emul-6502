@@ -1,3 +1,5 @@
+// Uses https://github.com/SingleStepTests/ProcessorTests
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -51,7 +53,7 @@ mod tests {
 
         // Load initial RAM state
         for &(addr, value) in &state.ram {
-            emul.bus.write(addr, value);
+            emul.bus.write_raw(addr, value);
         }
 
         emul
@@ -118,7 +120,7 @@ mod tests {
         _test_name: &str,
     ) -> Result<(), String> {
         for &(addr, expected_value) in &expected.ram {
-            let actual_value = emul.bus.read(addr);
+            let actual_value = emul.bus.read_raw(addr);
             if actual_value != expected_value {
                 return Err(format!(
                     "RAM[${:04X}] mismatch - expected ${:02X}, got ${:02X}",
@@ -219,7 +221,7 @@ mod tests {
 
     #[test]
     fn run_test_suite() {
-        run_test_suite_from_file("tests/6502/v1/0e.json", true);
+        run_test_suite_from_file("tests/6502/v1/ff.json", true);
     }
 
     pub fn run_test_suite_from_file(file_path: &str, verify_bus_ops: bool) {
@@ -327,7 +329,7 @@ mod tests {
         println!("├─────────────────────────────────────────────────────────────┤");
 
         for &(addr, expected_value) in &exp.ram {
-            let actual_value = emul.bus.read(addr);
+            let actual_value = emul.bus.read_raw(addr);
             print_register_comparison(
                 &format!("[${:04X}]", addr),
                 format!("${:02X}", expected_value),

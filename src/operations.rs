@@ -1,8 +1,9 @@
 use bitflags::{bitflags};
 
 use crate::bus::Bus;
-use crate::cpu::{ALUOuput, CPUCore, CPUState, Status};
+use crate::cpu::{CPUCore, CPUState, Status};
 use crate::shared::{Byte, Word};
+use crate::variants::ALUOuput;
 
 pub type MicroOp = for<'a, 'b> fn(&'a mut CPUCore, &'b mut Bus) -> StepCtl;
 
@@ -516,7 +517,9 @@ pub static NOP: Operation = Operation {
         AddressingModeFlag::ABSOLUTE, 
         AddressingModeFlag::ABSOLUTE_X),
     typ: OperationType::Timing,
-    micro: &[],
+    micro: &[
+        |_, _| {StepCtl::End}
+    ],
 };
 
 pub static JAM: Operation = Operation {
@@ -783,6 +786,7 @@ macro_rules! branch {
             typ: OperationType::Control,
             micro: &[
                 |cpu, _bus| {
+                    cpu.signals.poll_int = true;
                     if cpu.flags.contains($flag) == $flag_value {
                         StepCtl::Next
                     } else {
@@ -808,7 +812,8 @@ macro_rules! branch {
                     if page_wrap {
                         StepCtl::Next
                     } else {
-                        StepCtl::Skip
+                        cpu.signals.branch_T3 = true;
+                        StepCtl::End
                     }
                 },
 
@@ -1081,57 +1086,170 @@ pub static RTS: Operation = Operation {
 };
 
 /* --- INTERRUPTS --- */
-// Adapted from https://www.pagetable.com/?p=410
-// Goes through the operations of BRK but doesn't perform any actual writes
-// Instead bus pin is set to read, resulting in fake stack pushes of PCH, PCL, and P
-pub static RESET: Operation = Operation {
-    name: "RESET",
+pub static BRK: Operation = Operation {
+    name: "BRK",
     valid_modes: AddressingModeFlag::NONE,
     typ: OperationType::Interrupt,
-    micro: &[
-        |_cpu, bus| {
-            bus.read(bus.addr_bus);
-            StepCtl::Next
-        },
-        |_cpu, bus| {
-            bus.read(bus.addr_bus.wrapping_add(1));
-            StepCtl::Next
-        },
-        // Cycle 3: fake stack push of PCH -> actually a READ from 0x0100+SP
-        |cpu, bus| {
-            let addr = 0x0100u16.wrapping_add(cpu.sp.to_word());
-            bus.read(addr); // discard
-            cpu.sp.decrement();
-            StepCtl::Next
-        },
-        // Cycle 4: fake stack push of PCL
-        |cpu, bus| {
-            let addr = 0x0100u16.wrapping_add(cpu.sp.to_word());
-            bus.read(addr);
-            cpu.sp.decrement();
-            StepCtl::Next
-        },
-        // Cycle 5: fake stack push of P
-        |cpu, bus| {
-            let addr = 0x0100u16.wrapping_add(cpu.sp.to_word());
-            bus.read(addr);
-            cpu.sp.decrement();
-            StepCtl::Next
-        },
-        // Cycle 6: fetch low byte of RESET vector at $FFFC
-        |cpu, bus| {
-            cpu.flags.insert(Status::IRQ_DISABLE);
-            cpu.flags.insert(Status::UNUSED);
 
-            cpu.tmp8 = bus.read(0xFFFC);
+    micro: &[
+        |cpu, bus| {
+            if !cpu.signals.D1x1 {
+                bus.read(cpu.pc);
+            } else {
+                bus.read(cpu.pc);
+                cpu.pc = cpu.pc.wrapping_add(1);
+            }
             StepCtl::Next
         },
-        // Cycle 7: fetch high byte of RESET vector at $FFFD
+
+        // push PCH
         |cpu, bus| {
-            cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(0xFFFD)]);
-            StepCtl::End
+            if cpu.signals.RESG {
+                bus.read(cpu.sp.to_word());
+            } else {
+                bus.write(cpu.sp.to_word(), cpu.pc.to_le_bytes()[1]);
+            }
+            cpu.sp.decrement();
+            StepCtl::Next
         },
-        // Cycle 8: fetch first opcode & decode
+
+        // push PCL
+        |cpu, bus| {
+            if cpu.signals.RESG {
+                bus.read(cpu.sp.to_word());
+            } else {
+                bus.write(cpu.sp.to_word(), cpu.pc.to_le_bytes()[0]);
+            }
+            cpu.sp.decrement();
+            cpu.signals.VEC_next_cycle = true;
+
+            StepCtl::Next
+        },
+
+        // push P
+        |cpu, bus| {
+            let mut p = cpu.flags.bits();
+            p |= 0b0010_0000; // bit 5 always set
+
+            if cpu.signals.D1x1 {
+                p |= 0b0001_000;
+            }
+            
+            if cpu.signals.RESG {
+                bus.read(cpu.sp.to_word());
+            } else {
+                bus.write(cpu.sp.to_word(), p);
+            }
+
+            cpu.sp.decrement();
+
+            // Vector selector
+            // RESP check for hijack case (temp fix before phase seperation implemented correctly)
+            if cpu.signals.RESG | cpu.signals.RESP {
+                cpu.tmp16 = 0xFFFC;
+                cpu.signals.res_hijack = !cpu.signals.in_reset;
+            } else if cpu.signals.NMIG {
+                // NMI Hijack
+                cpu.tmp16 = 0xFFFA;
+            } else {
+                cpu.tmp16 = 0xFFFE;
+            }
+
+            StepCtl::Next
+        },
+
+        // vector low
+        |cpu, bus| {
+            cpu.tmp8 = bus.read(cpu.tmp16);
+
+            cpu.flags.insert(Status::IRQ_DISABLE);
+            cpu.signals.INTG = false;
+            cpu.signals.D1x1 = true;
+            cpu.signals.doIRQ = false;
+            cpu.signals.brk_done = true;
+
+            cpu.signals.VEC_next_cycle = false;
+            if cpu.signals.res_hijack && cpu.signals.RESP {
+                cpu.pc = Word::from_le_bytes([0xFD, cpu.tmp8]);
+                StepCtl::Skip
+            } else if cpu.signals.res_hijack && !cpu.signals.RESP {
+                cpu.pc = Word::from_le_bytes([0xFD, cpu.tmp8]);
+                StepCtl::End
+            } else {
+                // RES half-hijack
+                if cpu.signals.RESP {
+                    cpu.signals.res_hijack = true;
+                }
+                StepCtl::Next
+            }
+        },
+
+        // vector high
+        |cpu, bus| {
+            // RES Half-Hijack
+            if cpu.signals.res_hijack {
+                cpu.tmp16 = 0xFFFC;
+            }
+
+            cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.tmp16 + 1)]);
+
+            // It's impossible for the cpu to have in_reset signal while servicing some other form of interrupt
+            // Hence no check if whether current BRK was a RESET is required
+            cpu.signals.in_reset = false;
+
+            // phase 2
+            // RESG & NMIG are cleared using brk_done in phase 1
+            cpu.signals.brk_done = false;
+
+            if cpu.signals.res_hijack && cpu.signals.RESP {
+                StepCtl::Next
+            } else {
+                cpu.signals.RESG = false;
+                StepCtl::End
+            }
+        },
+        
+        // RES Hijack extra cycles for RES pin held low
+        |cpu, bus| {
+            // For full hijack pin held down case, brk_done isn't cleared because regular T0 microp is never triggered
+            cpu.signals.brk_done = false;
+
+            cpu.tmp8 = bus.read(cpu.pc);
+
+            let pcl = cpu.pc.to_le_bytes()[1].wrapping_sub(1);
+            cpu.pc = Word::from_le_bytes([pcl, cpu.tmp8]);
+
+            if cpu.signals.res_hijack && cpu.signals.RESP {
+                StepCtl::Next
+            } else {
+                cpu.signals.res_hijack = false;
+                cpu.signals.in_reset = true;
+                StepCtl::End
+            }
+        },
+
+        |cpu, bus| {
+            cpu.tmp8 = bus.read(cpu.pc);
+            let pcl = cpu.pc.to_le_bytes()[1].wrapping_sub(1);
+
+            cpu.pc = Word::from_le_bytes([pcl, cpu.tmp8]);
+
+            if cpu.signals.res_hijack && cpu.signals.RESP {
+                StepCtl::Next
+            } else {
+                cpu.signals.res_hijack = false;
+                cpu.signals.in_reset = true;
+                StepCtl::End
+            }
+        },
+
+        |cpu, bus| {
+            bus.read(cpu.pc);
+            cpu.pc = 0x00FF;
+            cpu.signals.res_hijack = false;
+            cpu.signals.in_reset = true;
+            StepCtl::End
+        }
     ],
 };
 
@@ -1167,99 +1285,7 @@ pub static RTI: Operation = Operation {
         // cycle 5: pull PCH
         |cpu, bus| {
             cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read(cpu.sp.to_word())]);
-            StepCtl::Next
+            StepCtl::End
         },
     ],
 };
-
-macro_rules! interrupt {
-    (
-        $name:literal,
-        vector = $vector:expr,
-        push_b = $push_b:expr,
-        prefetch = $prefetch:expr
-    ) => {
-        Operation {
-            name: $name,
-            valid_modes: AddressingModeFlag::NONE,
-            typ: OperationType::Interrupt,
-
-            micro: &[
-                // optional padding fetch (BRK only)
-                |cpu, bus| {
-                    if $prefetch {
-                        bus.read(cpu.pc);
-                        cpu.pc = cpu.pc.wrapping_add(1);
-                        StepCtl::Next
-                    } else {
-                        StepCtl::Merge
-                    }
-                },
-
-                // push PCH
-                |cpu, bus| {
-                    bus.write(cpu.sp.to_word(), cpu.pc.to_le_bytes()[1]);
-                    cpu.sp.decrement();
-                    StepCtl::Next
-                },
-
-                // push PCL
-                |cpu, bus| {
-                    bus.write(cpu.sp.to_word(), cpu.pc.to_le_bytes()[0]);
-                    cpu.sp.decrement();
-                    StepCtl::Next
-                },
-
-                // push P
-                |cpu, bus| {
-                    let mut p = cpu.flags.bits();
-                    p |= 0b0010_0000; // bit 5 always set
-
-                    if $push_b {
-                        p |= 0b0001_0000;
-                    } else {
-                        p &= !0b0001_0000;
-                    }
-
-                    bus.write(cpu.sp.to_word(), p);
-                    cpu.sp.decrement();
-                    cpu.flags.insert(Status::IRQ_DISABLE);
-                    StepCtl::Next
-                },
-
-                // vector low
-                |cpu, bus| {
-                    cpu.tmp8 = bus.read($vector);
-                    StepCtl::Next
-                },
-
-                // vector high
-                |cpu, bus| {
-                    cpu.pc = Word::from_le_bytes([cpu.tmp8, bus.read($vector + 1)]);
-                    StepCtl::End
-                },
-            ],
-        }
-    };
-}
-
-pub static BRK: Operation = interrupt!(
-    "BRK",
-    vector = 0xFFFE,
-    push_b = true,
-    prefetch = true
-);
-
-pub static IRQ: Operation = interrupt!(
-    "IRQ",
-    vector = 0xFFFE,
-    push_b = false,
-    prefetch = false
-);
-
-pub static NMI: Operation = interrupt!(
-    "NMI",
-    vector = 0xFFFA,
-    push_b = false,
-    prefetch = false
-);

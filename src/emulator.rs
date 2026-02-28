@@ -1,18 +1,18 @@
 use crate::bus::{Bus, BusOp, MemoryDevice};
-use crate::cpu::{CPU, CPUState};
+use crate::cpu::CPU;
 use crate::shared::*;
-use crate::variants::{ALUVariant, Decoder};
+use crate::variants::{Decoder, Quirks};
 
 pub struct Emulator<V>
 where
-    V: Decoder + ALUVariant,
+    V: Decoder + Quirks,
 {
     pub cpu: CPU<V>,
     pub bus: Bus,
-    pub cycles: u8,
+    pub cycles: u64,
 }
 
-impl<V: Decoder + ALUVariant> Emulator<V> {
+impl<V: Decoder + Quirks> Emulator<V> {
     pub fn new(variant: V) -> Emulator<V> {
         Self {
             cpu: CPU::new(variant),
@@ -32,7 +32,6 @@ impl<V: Decoder + ALUVariant> Emulator<V> {
         );
 
         let mask = !((size - 1) as Word);
-
         let rom = MemoryDevice::rom(rom_data);
         self.bus.attach_device(rom, base_addr, mask);
     }
@@ -46,18 +45,10 @@ impl<V: Decoder + ALUVariant> Emulator<V> {
         self.bus.attach_device(ram, base_addr, mask);
     }
 
-    pub fn reset_cpu(&mut self) {
-        self.cpu.reset();
-
-        while self.cpu.core.state == CPUState::Exec {
-            self.tick();
-        }
-    }
-
     pub fn tick(&mut self) -> BusOp {
+        self.bus.tick();
         self.cpu.tick(&mut self.bus);
-        let bus_op = self.bus.tick();
         self.cycles += 1;
-        bus_op
+        self.bus.last_op
     }
 }
