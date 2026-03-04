@@ -15,8 +15,12 @@ fn main() {
     let mut emul = emulator::Emulator::new(NMOS_6502);
     // Full RAM
     emul.attach_ram(0x0000, 0x10000);
+    emul.bus.write_raw(0x0, 0x58);
+    emul.bus.write_raw(0x1, 0xE8);
+    emul.bus.write_raw(0x2, 0xD0);
+    emul.bus.write_raw(0x3, 0xFE);
 
-    for _ in 0..10 {
+    for _ in 0..14 {
         let op = emul.tick();
         match op {
             BusOp::Read(addr, data) => {

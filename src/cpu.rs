@@ -1,5 +1,5 @@
 use crate::bus::Bus;
-use crate::operations::{Instruction, MicroOp, StepCtl};
+use crate::operations::{BusOpSpec, Instruction, MicroOp, StepCtl};
 use crate::shared::{Byte, Word};
 use crate::variants::{ALUOuput, Decoder, Quirks, VariantQuirks};
 
@@ -100,7 +100,7 @@ impl Signals {
             poll_int: false,
             VEC: false,
             brk_done: false,
-            in_reset: false,
+            in_reset: true, // RESET on power-on (skip pin down cycles)
             NMIP_ph1: false,
             branch_T3: false,
             res_hijack: false,
@@ -160,13 +160,46 @@ impl Signals {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum RdyResumeState {
+    Fetch,
+    Exec,
+    Jammed,
+    Reset,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum CPUState {
     Fetch,
     Exec,
-    Blocked,
+    Blocked(RdyResumeState),
     Jammed,
     Reset,
+}
+
+impl CPUState {
+    pub fn block(self) -> CPUState {
+        let resume = match self {
+            CPUState::Fetch => RdyResumeState::Fetch,
+            CPUState::Exec => RdyResumeState::Exec,
+            CPUState::Jammed => RdyResumeState::Jammed,
+            CPUState::Reset => RdyResumeState::Reset,
+            CPUState::Blocked(_) => panic!("Tried to block an already blocked CPU"),
+        };
+        CPUState::Blocked(resume)
+    }
+
+    pub fn unblock(self) -> CPUState {
+        match self {
+            CPUState::Blocked(resume) => match resume {
+                RdyResumeState::Fetch => CPUState::Fetch,
+                RdyResumeState::Exec => CPUState::Exec,
+                RdyResumeState::Jammed => CPUState::Jammed,
+                RdyResumeState::Reset => CPUState::Reset,
+            },
+            _ => panic!("Tried to unblock a CPU that wasn't blocked"),
+        }
+    }
 }
 
 pub struct CPUCore {
@@ -178,11 +211,16 @@ pub struct CPUCore {
     pub y: Byte,
     pub flags: Status,
 
+    pub data_bus: Byte,
+    pub addr_bus: Word,
+    pub rw: bool,
+
     pub quirks: &'static VariantQuirks,
 
     pub ir: Byte,
     pub tmp8: Byte,
     pub tmp16: Word,
+    pub eff_addr: Word,
     pub crossed: bool,
 
     pub signals: Signals,
@@ -191,6 +229,7 @@ pub struct CPUCore {
     pub micro_iter: Option<
         std::iter::Chain<std::slice::Iter<'static, MicroOp>, std::slice::Iter<'static, MicroOp>>,
     >,
+    pub micro_op: Option<&'static MicroOp>,
     pub state: CPUState,
 }
 
@@ -277,6 +316,10 @@ impl<V: Decoder + Quirks> CPU<V> {
                 y: 0,
                 flags: Status::UNUSED,
 
+                addr_bus: 0x00FF,
+                data_bus: 0x0,
+                rw: true,
+
                 quirks: variant.quirks(),
 
                 signals: Signals::new(),
@@ -284,10 +327,12 @@ impl<V: Decoder + Quirks> CPU<V> {
                 ir: 0,
                 tmp8: 0,
                 tmp16: 0,
+                eff_addr: 0,
                 crossed: false,
 
                 instr: Instruction::default(),
                 micro_iter: None,
+                micro_op: None,
                 state: CPUState::Fetch,
             },
 
@@ -295,8 +340,60 @@ impl<V: Decoder + Quirks> CPU<V> {
         }
     }
 
-    // RESG set before operation in phase two
-    pub fn tick(&mut self, bus: &mut Bus) {
+    fn get_external_operation(&mut self) {
+        let mut internal_count = 0;
+        loop {
+            #[rustfmt::skip]
+            let micro = self.core.micro_iter
+                .as_mut()
+                .expect("No iterator found while CPU state is Execute")
+                .next()
+                .expect("Iterator ended without StepCtl::End");
+
+            self.core.micro_op = Some(micro);
+            match micro.bus_spec() {
+                // Execute internal cycle right now
+                BusOpSpec::Internal => {
+                    internal_count += 1;
+                    assert!(
+                        internal_count <= 1,
+                        "Detected multiple consecutive internal cycles."
+                    );
+                    let ctrl = self
+                        .execute_internal()
+                        .expect("Non Execute CPU state while trying to fetch micro_op");
+
+                    match ctrl {
+                        StepCtl::Merge => continue,
+                        StepCtl::SkipMerge => {
+                            self.core.micro_iter.as_mut().unwrap().next();
+                            continue;
+                        }
+                        _ => {
+                            panic!(
+                                "Non merge micro_op control state returned while trying to execute internal operation."
+                            )
+                        }
+                    }
+                }
+
+                BusOpSpec::Read { addr } => {
+                    self.core.addr_bus = (addr)(&mut self.core);
+                    self.core.rw = true;
+                    break;
+                }
+
+                BusOpSpec::Write { addr, data } => {
+                    self.core.addr_bus = (addr)(&mut self.core);
+                    self.core.data_bus = (data)(&mut self.core);
+                    self.core.rw = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn phi1(&mut self) {
         let irq_disable = self.core.flags.contains(Status::IRQ_DISABLE);
         if self.core.state == CPUState::Fetch {
             // This needs to be called before signals.ph1
@@ -306,33 +403,50 @@ impl<V: Decoder + Quirks> CPU<V> {
 
         self.core.signals.ph1(irq_disable);
 
-        if self.core.signals.RESG {
-            if self.core.signals.res_hijack {
-                // Hold off standard RES servicing procedure
-            } else if !self.core.signals.in_reset {
-                self.core.state = CPUState::Reset;
-                self.core.signals.in_reset = true;
-            } else if self.core.signals.RESP && self.core.signals.in_reset {
-                // Reset asserted again while servicing reset
-                self.core.state = CPUState::Reset;
-            } else if self.core.state == CPUState::Reset && !self.core.signals.RESP {
-                self.core.state = CPUState::Fetch;
-            }
-        }
-
-        // Boundary of phase one & phase two
-        // If rdy is set low and current cycle is a read cycle then, elongate current cycle until rdy is released
-        // No way to know if current phase is read, without executing microp present currently
-        if !bus.rdy {
-            self.core.state = CPUState::Blocked;
+        // In RDY block--cycle elongated.
+        if matches!(self.core.state, CPUState::Blocked(_)) {
             return;
         }
 
-        // synchronise external lines
-        self.core.signals.RES_sync = bus.res;
-        self.core.signals.NMIP = !bus.nmi;
-        self.core.signals.IRQ_sync = !bus.irq;
+        if self.core.signals.RESG && !self.core.signals.res_hijack {
+            match (self.core.signals.in_reset, self.core.signals.RESP) {
+                // Fresh reset — begin servicing
+                (false, _) => {
+                    self.core.state = CPUState::Reset;
+                    self.core.signals.in_reset = true;
+                }
+                // Reset re-asserted while already servicing — restart
+                (true, true) => {
+                    self.core.state = CPUState::Reset;
+                }
+                // Reset released — start T0 of reset/brk sequence
+                (true, false) if self.core.state == CPUState::Reset => {
+                    self.core.state = CPUState::Fetch;
+                }
+                _ => {}
+            }
+        }
 
+        match self.core.state {
+            CPUState::Fetch | CPUState::Reset => {
+                self.core.addr_bus = self.core.pc;
+                self.core.rw = true;
+            }
+            CPUState::Exec => self.get_external_operation(),
+            CPUState::Jammed => {
+                self.core.addr_bus = self.core.pc.wrapping_sub(1);
+                self.core.rw = true;
+            }
+            CPUState::Blocked(_) => {
+                panic!("Tried to set external operation while CPU was blocked.");
+            }
+        }
+
+        // RESG forces r/w pin to read (high)
+        self.core.rw |= self.core.signals.RESG;
+    }
+
+    fn execute_internal(&mut self) -> Option<StepCtl> {
         // --- Fetch & Decode Opcode Phase
         match self.core.state {
             CPUState::Fetch => {
@@ -341,10 +455,9 @@ impl<V: Decoder + Quirks> CPU<V> {
                 self.core.signals.brk_done = false;
                 // Service Interrupts
                 if !self.core.signals.D1x1 {
-                    bus.read(self.core.pc);
                     self.core.ir = 0;
                 } else {
-                    self.core.ir = bus.read(self.core.pc);
+                    self.core.ir = self.core.data_bus;
                     self.core.pc = self.core.pc.wrapping_add(1);
                 }
 
@@ -363,88 +476,136 @@ impl<V: Decoder + Quirks> CPU<V> {
 
                 self.core.micro_iter = Some(self.core.instr.pipeline());
                 self.core.state = CPUState::Exec;
+                None
             }
 
             CPUState::Exec => {
-                loop {
-                    // --- Execute Micro-op Phase
-                    // Fetch micro-op
-                    let micro = {
-                        let iter = match &mut self.core.micro_iter {
-                            Some(it) => it,
-                            None => {
-                                self.core.state = CPUState::Fetch;
-                                return;
-                            }
-                        };
+                // micro-op already loaded into field while fetching external operation
+                // execute directly from field
+                Some(
+                    self.core
+                        .micro_op
+                        .expect("No micro_op to execute")
+                        .execute(&mut self.core),
+                )
+            }
 
-                        iter.next()
-                    };
+            CPUState::Jammed | CPUState::Blocked(_) | CPUState::Reset => {
+                // No internal operations performed
+                None
+            }
+        }
+    }
 
-                    // If end of iterator, skip to next instruction
-                    let Some(micro) = micro else {
-                        self.core.state = CPUState::Fetch;
-                        self.core.micro_iter = None;
-                        return;
-                    };
+    pub fn drive_bus(&mut self, bus: &mut Bus) {
+        if self.core.rw {
+            self.core.data_bus = bus.read(self.core.addr_bus);
+        } else {
+            bus.write(self.core.addr_bus, self.core.data_bus);
+        }
+    }
 
-                    // Execute micro-op
-                    match micro(&mut self.core, bus) {
-                        StepCtl::Next => {
-                            break;
-                        }
+    pub fn phi2(&mut self, bus: &mut Bus) {
+        // synchronise external lines
+        self.core.signals.RES_sync = bus.res;
+        self.core.signals.NMIP = !bus.nmi;
+        self.core.signals.IRQ_sync = !bus.irq;
 
-                        StepCtl::End => {
-                            self.core.micro_iter = None;
-                            self.core.signals.poll_int = true;
+        match (self.core.rw, bus.rdy, &self.core.state) {
+            // Read cycle with RDY low — block and elongate
+            (true, false, state) if !matches!(state, CPUState::Blocked(_)) => {
+                self.core.state = self.core.state.block();
+                self.core.signals.ph2();
+                return;
+            }
+            // Still blocked, RDY still low — keep waiting
+            (_, false, CPUState::Blocked(_)) => {
+                self.core.signals.ph2();
+                return;
+            }
+            // RDY released — resume
+            (_, true, CPUState::Blocked(_)) => {
+                self.core.state = self.core.state.unblock();
+            }
+            // Normal cycle
+            _ => {}
+        }
 
-                            // Don't poll interrupts at instruction boundary for branch taken without page cross case
-                            // Already polled at T2
-                            if self.core.signals.branch_T3 {
-                                self.core.signals.poll_int = false;
-                                self.core.signals.branch_T3 = false;
-                            }
-                            self.core.state = CPUState::Fetch;
-                            break;
-                        }
+        // Drive bus
+        if self.core.rw {
+            self.core.data_bus = bus.read(self.core.addr_bus);
+        } else {
+            bus.write(self.core.addr_bus, self.core.data_bus);
+        }
 
-                        StepCtl::Skip => {
-                            if let Some(iter) = &mut self.core.micro_iter {
-                                iter.next(); // skip fake stall micro-op
-                            }
-                            break;
-                        }
+        // --- Fetch & Decode Opcode Phase
+        loop {
+            let Some(ctrl) = self.execute_internal() else {
+                break;
+            };
 
-                        StepCtl::Merge => {
-                            continue;
-                        }
+            match ctrl {
+                StepCtl::Next => {
+                    break;
+                }
 
-                        StepCtl::SkipMerge => {
-                            if let Some(iter) = &mut self.core.micro_iter {
-                                iter.next(); // skip fake stall micro-op
-                            }
-                            continue;
-                        }
+                StepCtl::End => {
+                    self.core.micro_iter = None;
+                    self.core.signals.poll_int = true;
+
+                    // Don't poll interrupts at instruction boundary for branch taken without page cross case
+                    // Already polled at T2
+                    if self.core.signals.branch_T3 {
+                        self.core.signals.poll_int = false;
+                        self.core.signals.branch_T3 = false;
                     }
-                }
-            }
-
-            CPUState::Jammed => {
-                bus.read(self.core.pc.wrapping_add(1));
-            }
-
-            CPUState::Blocked => {
-                if !bus.rdy {
-                    return;
+                    self.core.state = CPUState::Fetch;
+                    break;
                 }
 
-                // If rdy is released, complete the pending phase two
-                // pending bus op mechanism to be implemented
-                // mechanism for restoring cpu state required
-            }
+                StepCtl::Skip(n) => {
+                    for _ in 0..n {
+                        self.core.micro_iter.as_mut().unwrap().next(); // skip fake stall micro-op
+                    }
+                    break;
+                }
 
-            CPUState::Reset => {
-                bus.read(self.core.pc);
+                StepCtl::Merge => {
+                    #[rustfmt::skip]
+                    let micro = self.core.micro_iter
+                        .as_mut()
+                        .unwrap()
+                        .next()
+                        .expect("Iterator ended on Merge without StepCtl::End");
+
+                    assert!(
+                        matches!(micro.bus_spec(), BusOpSpec::Internal),
+                        "Micro-op following a clocked Merge must be Internal. IR=${:02X} PC=${:04X}",
+                        self.core.ir,
+                        self.core.pc
+                    );
+                    self.core.micro_op = Some(micro);
+                    continue;
+                }
+
+                StepCtl::SkipMerge => {
+                    self.core.micro_iter.as_mut().unwrap().next(); // skip fake stall micro-op
+                    #[rustfmt::skip]
+                    let micro = self.core.micro_iter
+                        .as_mut()
+                        .unwrap()
+                        .next()
+                        .expect("Iterator ended on Merge without StepCtl::End");
+
+                    assert!(
+                        matches!(micro.bus_spec(), BusOpSpec::Internal),
+                        "Micro-op following a clocked Merge must be Internal. IR=${:02X} PC=${:04X}",
+                        self.core.ir,
+                        self.core.pc
+                    );
+                    self.core.micro_op = Some(micro);
+                    continue;
+                }
             }
         }
 

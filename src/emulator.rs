@@ -47,7 +47,8 @@ impl<V: Decoder + Quirks> Emulator<V> {
 
     pub fn tick(&mut self) -> BusOp {
         self.bus.tick();
-        self.cpu.tick(&mut self.bus);
+        self.cpu.phi1();
+        self.cpu.phi2(&mut self.bus);
         self.cycles += 1;
         self.bus.last_op
     }

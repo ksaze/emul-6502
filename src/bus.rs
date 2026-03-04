@@ -152,9 +152,9 @@ pub enum BusOp {
 
 pub struct Bus {
     mappings: Vec<BusMapping>,
+    data_bus: Byte,
+    addr_bus: Word,
     pub last_op: BusOp,
-    pub data_bus: Byte,
-    pub addr_bus: Word,
     pub irq: bool,
     pub nmi: bool,
     pub res: bool,
