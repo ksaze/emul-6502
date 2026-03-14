@@ -1,87 +1,12 @@
-#[allow(clippy::wildcard_imports)]
-use crate::operations::*;
-use crate::{
-    cpu::{CPUCore, Status},
-    shared::{Byte, Word},
-};
+use crate::core::cpu::{CPUCore, Status};
+use crate::core::microcode::Instruction;
+use crate::core::microcode::addressing_modes::*;
+use crate::core::microcode::operations::*;
+use crate::shared::Byte;
 
-#[inline]
-fn aaa(op: u8) -> u8 {
-    (op & 0xE0) >> 5
-}
-
-#[inline]
-fn bbb(op: u8) -> u8 {
-    (op & 0x1C) >> 2
-}
-
-#[inline]
-fn cc(op: u8) -> u8 {
-    op & 0x03
-}
-
-#[inline]
-fn lnibble(op: u8) -> u8 {
-    op & 0x0F
-}
-
-#[inline]
-fn hnibble(op: u8) -> u8 {
-    (op & 0xF0) >> 4
-}
-
-pub enum ALUOuput<T> {
-    Done(T),
-    Penalty(T),
-}
-
-pub struct VariantQuirks {
-    pub adc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
-    pub sbc: fn(&mut CPUCore, Byte) -> ALUOuput<Byte>,
-    pub ind_addr_inc: fn(Word) -> ALUOuput<Word>,
-}
-
-pub trait Decoder {
-    fn decode(&self, opcode: Byte) -> Option<Instruction>;
-}
-
-pub trait Quirks {
-    fn quirks(&self) -> &'static VariantQuirks;
-}
-
-// Decode should only return None to delegate decoding to parent variant
-// Base variants should always return some Instruction
-pub struct DecodeRule {
-    pub matches: fn(u8) -> bool,
-    pub decode: fn(u8) -> Option<Instruction>,
-}
-
-#[derive(Copy, Clone)]
-pub struct Variant {
-    pub rules: &'static [DecodeRule],
-    pub parent: Option<&'static Variant>,
-    pub quirks: &'static VariantQuirks,
-}
-
-impl Decoder for Variant {
-    fn decode(&self, opcode: u8) -> Option<Instruction> {
-        for rule in self.rules {
-            if (rule.matches)(opcode) {
-                if let Some(desc) = (rule.decode)(opcode) {
-                    return Some(desc);
-                }
-            }
-        }
-
-        self.parent.and_then(|p| p.decode(opcode))
-    }
-}
-
-impl Quirks for Variant {
-    fn quirks(&self) -> &'static VariantQuirks {
-        self.quirks
-    }
-}
+use super::helpers::*;
+use super::traits::{ALUOuput, VariantQuirks};
+use super::variant::*;
 
 fn decode_gr1(op: Byte) -> Option<Instruction> {
     let addr = match bbb(op) {

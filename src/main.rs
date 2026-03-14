@@ -1,18 +1,16 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
 
-use crate::bus::BusOp;
-use crate::variants::NMOS_6502;
+use mos65x::core::bus::BusOp;
+use mos65x::core::variants::NMOS_6502;
+use mos65x::emulator::Emulator;
 
-mod bus;
-mod cpu;
+mod core;
 mod emulator;
-mod operations;
 mod shared;
-mod variants;
 
 fn main() {
-    let mut emul = emulator::Emulator::new(NMOS_6502);
+    let mut emul = Emulator::new(NMOS_6502);
     // Full RAM
     emul.attach_ram(0x0000, 0x10000);
     emul.bus.write_raw(0x0, 0x58);

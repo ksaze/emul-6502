@@ -1,5 +1,4 @@
 // Uses https://github.com/SingleStepTests/ProcessorTests
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -27,21 +26,26 @@ struct CpuState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mos65x::bus::BusOp;
-    use mos65x::cpu::Status;
+    use mos65x::core::bus::BusOp;
+    use mos65x::core::cpu::test_utils::{CPUState, Status};
+    use mos65x::core::variants::{Decoder, NMOS_6502, Quirks};
     use mos65x::emulator::Emulator;
-    use mos65x::variants::{NMOS_6502, Variant};
 
     fn load_test_cases<P: AsRef<Path>>(path: P) -> Vec<TestCase> {
         let contents = fs::read_to_string(path).expect("Failed to read test file");
         serde_json::from_str(&contents).expect("Failed to parse JSON")
     }
 
-    fn setup_emulator(state: &CpuState) -> Emulator<Variant> {
-        let mut emul = Emulator::new(NMOS_6502);
+    fn setup_emulator<V: Decoder + Quirks>(state: &CpuState, variant: V) -> Emulator<V> {
+        let mut emul = Emulator::new(variant);
 
         // Attach full RAM
         emul.attach_ram(0x0000, 0x10000);
+
+        // Complete reset sequence
+        for _ in 0..7 {
+            emul.tick();
+        }
 
         // Set initial CPU state
         emul.cpu.core.pc = state.pc;
@@ -59,8 +63,8 @@ mod tests {
         emul
     }
 
-    fn verify_cpu_state(
-        emul: &Emulator<Variant>,
+    fn verify_cpu_state<V: Decoder + Quirks>(
+        emul: &Emulator<V>,
         expected: &CpuState,
         _test_name: &str,
     ) -> Result<(), String> {
@@ -114,8 +118,8 @@ mod tests {
         Ok(())
     }
 
-    fn verify_ram_state(
-        emul: &mut Emulator<Variant>,
+    fn verify_ram_state<V: Decoder + Quirks>(
+        emul: &mut Emulator<V>,
         expected: &CpuState,
         _test_name: &str,
     ) -> Result<(), String> {
@@ -197,8 +201,8 @@ mod tests {
         Ok(())
     }
 
-    fn run_test(test: &TestCase, verify_bus_ops: bool) -> Result<(), String> {
-        let mut emul = setup_emulator(&test.initial);
+    fn run_test(test: &TestCase) -> Result<(), String> {
+        let mut emul = setup_emulator(&test.initial, NMOS_6502);
         let mut bus_ops = Vec::new();
 
         // Execute instruction and collect bus operations
@@ -212,19 +216,70 @@ mod tests {
 
         verify_ram_state(&mut emul, &test.final_state, &test.name)?;
 
-        if verify_bus_ops {
-            verify_cycles(&bus_ops, &test.cycles, &test.name)?;
-        }
+        verify_cycles(&bus_ops, &test.cycles, &test.name)?;
 
+        // Verify if instruction was actually completed
+        assert!(emul.cpu.core.state == CPUState::Fetch);
         Ok(())
     }
 
     #[test]
-    fn run_test_suite() {
-        run_test_suite_from_file("tests/6502/v1/ff.json", true);
+    fn test_opcode() {
+        run_test_suite_from_file("tests/6502/v1/7c.json");
     }
 
-    pub fn run_test_suite_from_file(file_path: &str, verify_bus_ops: bool) {
+    #[test]
+    fn single_step_suite() {
+        let dir = "tests/6502/v1";
+
+        // Exclude illegal 6502 opcodes
+        #[rustfmt::skip]
+        let exclude = &[
+            "02", "03", "04", "07", "0b", "0c", "0f",
+            "12", "13", "14", "17", "1a", "1b", "1c", "1f",
+            "22", "23", "27", "2b", "2f",
+            "32", "33", "34", "37", "3a", "3b", "3c", "3f",
+            "42", "43", "44", "47", "4a", "4b", "4c", "4f",
+            "52", "53", "54", "57", "5a", "5b", "5c", "5f",
+            "62", "63", "64", "67", "6b", "6f",
+            "72", "73", "74", "77", "7a", "7b", "7c", "7f",
+            "81", "82", "83", "87", "89", "8b", "8f",
+            "92", "93", "97", "9b", "9c", "9e", "9f",
+            "a3", "a7", "ab", "af",
+            "b2", "b3", "b7", "bb", "bf",
+            "c2", "c3", "c7", "cb", "cf",
+            "d2", "d3", "d4", "d7", "da", "db", "dc", "df",
+            "e2", "e3", "e7", "eb", "ef",
+            "f2", "f3", "f4", "f7", "fa", "fb", "fc", "ff",
+        ];
+
+        // let exclude: &[&str] = &[];
+
+        for entry in std::fs::read_dir(dir).expect("Failed to read test directory") {
+            let entry = entry.expect("Failed to read directory entry");
+            let path = entry.path();
+
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+            if exclude.iter().any(|&e| e.eq_ignore_ascii_case(stem)) {
+                println!("Skipping: {}", path.display());
+                continue;
+            }
+
+            println!("Running: {}", path.display());
+            let result = std::panic::catch_unwind(|| {
+                run_test_suite_from_file(path.to_str().unwrap());
+            });
+
+            assert!(result.is_ok(), "FAILED: {}", path.display());
+        }
+    }
+
+    pub fn run_test_suite_from_file(file_path: &str) {
         println!("Loading test suite from: {}", file_path);
 
         let test_cases = load_test_cases(file_path);
@@ -239,7 +294,7 @@ mod tests {
                 test.name
             );
 
-            match run_test(test, verify_bus_ops) {
+            match run_test(test) {
                 Ok(()) => {
                     println!("✅ PASSED");
                 }
@@ -247,7 +302,7 @@ mod tests {
                     println!("❌ FAILED\n");
 
                     // Run test again to get actual state and bus ops
-                    let mut emul = setup_emulator(&test.initial);
+                    let mut emul = setup_emulator(&test.initial, NMOS_6502);
                     let mut actual_bus_ops = Vec::new();
 
                     for _ in 0..test.cycles.len() {
@@ -265,9 +320,9 @@ mod tests {
         println!("\n🎉 All {} tests passed!", test_cases.len());
     }
 
-    fn print_full_test_failure(
+    fn print_full_test_failure<V: Decoder + Quirks>(
         test: &TestCase,
-        emul: &mut Emulator<Variant>,
+        emul: &mut Emulator<V>,
         actual_bus_ops: &[BusOp],
         error: &str,
     ) {

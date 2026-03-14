@@ -1,7 +1,7 @@
-use crate::bus::{Bus, BusOp, MemoryDevice};
-use crate::cpu::CPU;
+use crate::core::bus::{Bus, BusOp, MemoryDevice};
+use crate::core::cpu::CPU;
+use crate::core::variants::{Decoder, Quirks};
 use crate::shared::*;
-use crate::variants::{Decoder, Quirks};
 
 pub struct Emulator<V>
 where

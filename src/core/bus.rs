@@ -127,7 +127,7 @@ impl Device for RAM64K {
     fn tick(&mut self) {}
 }
 
-pub struct BusMapping {
+struct BusMapping {
     pub base: Word,
     pub mask: Word,
     pub device: SharedDevice<dyn Device>,
@@ -201,7 +201,7 @@ impl Bus {
         self.mappings.iter_mut().find(|map| map.maps(addr))
     }
 
-    pub fn read(&mut self, addr: Word) -> Byte {
+    pub(super) fn read(&mut self, addr: Word) -> Byte {
         if self.last_op != BusOp::Internal {
             panic!("multiple bus operations in one cycle.");
         }
@@ -218,7 +218,7 @@ impl Bus {
         }
     }
 
-    pub fn write(&mut self, addr: Word, val: Byte) {
+    pub(super) fn write(&mut self, addr: Word, val: Byte) {
         if self.last_op != BusOp::Internal {
             panic!("multiple bus operations in one cycle.");
         }
@@ -232,6 +232,7 @@ impl Bus {
         }
     }
 
+    #[cfg(feature = "test-utils")]
     pub fn read_raw(&mut self, addr: Word) -> Byte {
         if let Some(map) = self.find_device_mut(addr) {
             let val = map.device.borrow_mut().read(map.offset(addr));
@@ -241,6 +242,7 @@ impl Bus {
         }
     }
 
+    #[cfg(feature = "test-utils")]
     pub fn write_raw(&mut self, addr: Word, val: Byte) {
         if let Some(map) = self.find_device_mut(addr) {
             map.device.borrow_mut().write(map.offset(addr), val);

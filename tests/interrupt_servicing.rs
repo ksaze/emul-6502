@@ -1,7 +1,7 @@
-use mos65x::bus::{BusOp, Device, EmulatorControl};
+use mos65x::core::bus::{BusOp, Device, EmulatorControl};
+use mos65x::core::variants::{Decoder, NMOS_6502, Quirks};
 use mos65x::emulator::Emulator;
 use mos65x::shared::SharedDevice;
-use mos65x::variants::{Decoder, NMOS_6502, Quirks};
 
 fn bus_op_debug(op: BusOp) {
     match op {
@@ -35,7 +35,7 @@ where
     emul.bus.write_raw(0xFFFC, (load_addr & 0xFF) as u8);
     emul.bus.write_raw(0xFFFD, (load_addr >> 8) as u8);
 
-    for _ in 0..8 {
+    for _ in 0..7 {
         emul.tick();
     }
 
@@ -61,6 +61,7 @@ fn run_cycles<V, Fa, Fb>(
 
         let op = emul.tick();
 
+        println!("Cycle {}", cycle);
         println!(
             "pc: {:#4X}, Exec {}",
             emul.cpu.core.pc, emul.cpu.core.instr.name

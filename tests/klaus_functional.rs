@@ -3,10 +3,10 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
 
-use mos65x::cpu::CPUState;
+use mos65x::core::cpu::test_utils::CPUState;
+use mos65x::core::variants::NMOS_6502;
 use mos65x::emulator::Emulator;
 use mos65x::shared::Word;
-use mos65x::variants::NMOS_6502;
 
 use std::fs::read;
 
