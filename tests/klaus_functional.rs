@@ -5,7 +5,7 @@
 
 use mos65x::core::cpu::test_utils::CPUState;
 use mos65x::core::variants::NMOS_6502;
-use mos65x::emulator::Emulator;
+use mos65x::generic_system::GenericSystem;
 use mos65x::shared::Word;
 
 use std::fs::read;
@@ -15,7 +15,7 @@ fn klaus_6502_functional_test() {
     let bin = read("tests/roms/6502_functional_test.bin")
         .expect("failed to load Klaus functional test binary");
 
-    let mut emul = Emulator::new(NMOS_6502);
+    let mut emul = GenericSystem::new(NMOS_6502);
 
     // Full 64K RAM
     emul.attach_ram(0x0000, 0x10000);
@@ -58,7 +58,7 @@ fn klaus_6502_functional_test() {
     let final_pc = emul.cpu.core.pc - 1;
     assert!(
         final_pc == 0x3469,
-        "Emulator didn't stop at success address. ❌ "
+        "GenericSystem didn't stop at success address. ❌ "
     );
 
     println!("Klaus Functional Test passed. ✅ ");
@@ -69,7 +69,7 @@ fn bruce_clark_decimal_mode_test() {
     let bin = read("tests/roms/6502_decimal_test.bin")
         .expect("failed to load Klaus functional test binary");
 
-    let mut emul = Emulator::new(NMOS_6502);
+    let mut emul = GenericSystem::new(NMOS_6502);
 
     // Full 64K RAM
     emul.attach_ram(0x0000, 0x10000);

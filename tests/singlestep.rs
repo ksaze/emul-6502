@@ -29,15 +29,15 @@ mod tests {
     use mos65x::core::bus::BusOp;
     use mos65x::core::cpu::test_utils::{CPUState, Status};
     use mos65x::core::variants::{Decoder, NMOS_6502, Quirks};
-    use mos65x::emulator::Emulator;
+    use mos65x::generic_system::GenericSystem;
 
     fn load_test_cases<P: AsRef<Path>>(path: P) -> Vec<TestCase> {
         let contents = fs::read_to_string(path).expect("Failed to read test file");
         serde_json::from_str(&contents).expect("Failed to parse JSON")
     }
 
-    fn setup_emulator<V: Decoder + Quirks>(state: &CpuState, variant: V) -> Emulator<V> {
-        let mut emul = Emulator::new(variant);
+    fn setup_emulator<V: Decoder + Quirks>(state: &CpuState, variant: V) -> GenericSystem<V> {
+        let mut emul = GenericSystem::new(variant);
 
         // Attach full RAM
         emul.attach_ram(0x0000, 0x10000);
@@ -64,7 +64,7 @@ mod tests {
     }
 
     fn verify_cpu_state<V: Decoder + Quirks>(
-        emul: &Emulator<V>,
+        emul: &GenericSystem<V>,
         expected: &CpuState,
         _test_name: &str,
     ) -> Result<(), String> {
@@ -119,7 +119,7 @@ mod tests {
     }
 
     fn verify_ram_state<V: Decoder + Quirks>(
-        emul: &mut Emulator<V>,
+        emul: &mut GenericSystem<V>,
         expected: &CpuState,
         _test_name: &str,
     ) -> Result<(), String> {
@@ -322,7 +322,7 @@ mod tests {
 
     fn print_full_test_failure<V: Decoder + Quirks>(
         test: &TestCase,
-        emul: &mut Emulator<V>,
+        emul: &mut GenericSystem<V>,
         actual_bus_ops: &[BusOp],
         error: &str,
     ) {

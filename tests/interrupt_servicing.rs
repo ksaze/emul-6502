@@ -1,6 +1,7 @@
-use mos65x::core::bus::{BusOp, Device, EmulatorControl};
+use mos65x::core::bus::{BusOp, Device};
 use mos65x::core::variants::{Decoder, NMOS_6502, Quirks};
-use mos65x::emulator::Emulator;
+use mos65x::devices::EmulatorControl;
+use mos65x::generic_system::GenericSystem;
 use mos65x::shared::SharedDevice;
 
 fn bus_op_debug(op: BusOp) {
@@ -21,11 +22,11 @@ fn setup_emulator<V>(
     variant: V,
     bin: &[u8],
     load_addr: u16,
-) -> (Emulator<V>, SharedDevice<EmulatorControl>)
+) -> (GenericSystem<V>, SharedDevice<EmulatorControl>)
 where
     V: Decoder + Quirks,
 {
-    let mut emul = Emulator::new(variant);
+    let mut emul = GenericSystem::new(variant);
     emul.attach_ram(0x0000, 0x10000);
 
     for (i, b) in bin.iter().enumerate() {
@@ -46,15 +47,15 @@ where
 }
 
 fn run_cycles<V, Fa, Fb>(
-    emul: &mut Emulator<V>,
+    emul: &mut GenericSystem<V>,
     ctrl: &SharedDevice<EmulatorControl>,
     cycles: usize,
     mut before_tick: Fa,
     mut after_tick: Fb,
 ) where
     V: Decoder + Quirks,
-    Fa: FnMut(usize, &mut Emulator<V>, &SharedDevice<EmulatorControl>),
-    Fb: FnMut(usize, &mut Emulator<V>, &SharedDevice<EmulatorControl>),
+    Fa: FnMut(usize, &mut GenericSystem<V>, &SharedDevice<EmulatorControl>),
+    Fb: FnMut(usize, &mut GenericSystem<V>, &SharedDevice<EmulatorControl>),
 {
     for cycle in 0..cycles {
         before_tick(cycle, emul, ctrl);

@@ -1,3 +1,5 @@
 pub mod core;
-pub mod emulator;
+pub mod devices;
+pub mod driver;
+pub mod generic_system;
 pub mod shared;

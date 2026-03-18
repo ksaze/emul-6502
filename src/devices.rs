@@ -1,0 +1,127 @@
+use crate::{
+    core::bus::{Bus, Device},
+    shared::{Byte, Word},
+};
+
+pub trait DMAController {
+    fn wants_bus(&self) -> bool;
+    fn dma_tick(&mut self, bus: &mut Bus);
+}
+
+pub struct GenericDMADevice<S> {
+    pub dma_cycle: fn(&mut S, &mut Bus),
+    pub wants_bus: fn(&S) -> bool,
+    pub on_write: fn(&mut GenericDMADevice<S>, addr: Word, val: Byte),
+    pub on_read: fn(&mut GenericDMADevice<S>, addr: Word) -> Byte,
+
+    pub active: bool,
+    pub warmup: u8,
+    pub state: S,
+}
+
+impl<S: 'static> Device for GenericDMADevice<S> {
+    fn read(&mut self, addr: Word) -> Byte {
+        (self.on_read)(self, addr)
+    }
+
+    fn write(&mut self, addr: Word, val: Byte) {
+        (self.on_write)(self, addr, val);
+    }
+
+    fn rdy(&self) -> bool {
+        (self.wants_bus)(&self.state)
+    }
+
+    fn tick(&mut self) {}
+}
+
+impl<S: 'static> DMAController for GenericDMADevice<S> {
+    fn wants_bus(&self) -> bool {
+        self.active && ((self.wants_bus)(&self.state))
+    }
+
+    fn dma_tick(&mut self, bus: &mut Bus) {
+        (self.dma_cycle)(&mut self.state, bus);
+    }
+}
+
+pub struct EmulatorControl {
+    pub nmi_line: bool,
+    pub irq_line: bool,
+    pub res_line: bool,
+    pub rdy_line: bool,
+}
+
+impl EmulatorControl {
+    pub fn new() -> Self {
+        Self {
+            nmi_line: true,
+            irq_line: true,
+            res_line: true,
+            rdy_line: true,
+        }
+    }
+}
+
+impl Device for EmulatorControl {
+    fn read(&mut self, _addr: Word) -> Byte {
+        // Garbage Value. Never Triggered
+        0xFF
+    }
+    fn write(&mut self, _addr: Word, _val: Byte) {}
+    fn tick(&mut self) {}
+
+    fn nmi(&self) -> bool {
+        self.nmi_line
+    }
+    fn irq(&self) -> bool {
+        self.irq_line
+    }
+    fn res(&self) -> bool {
+        self.res_line
+    }
+    fn rdy(&self) -> bool {
+        self.rdy_line
+    }
+}
+
+pub struct MemoryDevice {
+    data: Box<[Byte]>,
+
+    readonly: bool,
+}
+
+impl MemoryDevice {
+    pub fn new(data: Box<[Byte]>, readonly: bool) -> Self {
+        Self { data, readonly }
+    }
+
+    pub fn ram(size: usize) -> Self {
+        assert!(size.is_power_of_two());
+        Self::new(vec![0; size].into_boxed_slice(), false)
+    }
+
+    pub fn rom(rom_data: Vec<Byte>) -> Self {
+        Self::new(rom_data.into_boxed_slice(), true)
+    }
+}
+
+impl Device for MemoryDevice {
+    #[inline]
+    fn read(&mut self, addr: Word) -> Byte {
+        self.data[addr as usize]
+    }
+
+    #[inline]
+    fn write(&mut self, addr: Word, val: Byte) {
+        if self.readonly {
+            return;
+        }
+
+        self.data[addr as usize] = val;
+    }
+
+    fn tick(&mut self) {
+        // No timing behavior for memory devices
+    }
+}

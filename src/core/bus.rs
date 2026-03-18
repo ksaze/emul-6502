@@ -16,115 +16,15 @@ pub trait Device {
     fn res(&self) -> bool {
         true
     }
-
+    fn rdy(&self) -> bool {
+        true
+    }
     fn into_shared(self) -> SharedDevice<Self>
     where
         Self: Sized + 'static,
     {
         Rc::new(RefCell::new(self)) as SharedDevice<Self>
     }
-}
-
-pub struct EmulatorControl {
-    pub nmi_line: bool,
-    pub irq_line: bool,
-    pub res_line: bool,
-}
-
-impl EmulatorControl {
-    pub fn new() -> Self {
-        Self {
-            nmi_line: true,
-            irq_line: true,
-            res_line: true,
-        }
-    }
-}
-
-impl Device for EmulatorControl {
-    fn read(&mut self, _addr: Word) -> Byte {
-        // Garbage Value. Never Triggered
-        0xFF
-    }
-    fn write(&mut self, _addr: Word, _val: Byte) {}
-    fn tick(&mut self) {}
-
-    fn nmi(&self) -> bool {
-        self.nmi_line
-    }
-    fn irq(&self) -> bool {
-        self.irq_line
-    }
-    fn res(&self) -> bool {
-        self.res_line
-    }
-}
-
-pub struct MemoryDevice {
-    data: Box<[Byte]>,
-
-    readonly: bool,
-}
-
-impl MemoryDevice {
-    pub fn new(data: Box<[Byte]>, readonly: bool) -> Self {
-        Self { data, readonly }
-    }
-
-    pub fn ram(size: usize) -> Self {
-        assert!(size.is_power_of_two());
-        Self::new(vec![0; size].into_boxed_slice(), false)
-    }
-
-    pub fn rom(rom_data: Vec<Byte>) -> Self {
-        Self::new(rom_data.into_boxed_slice(), true)
-    }
-}
-
-impl Device for MemoryDevice {
-    #[inline]
-    fn read(&mut self, addr: Word) -> Byte {
-        self.data[addr as usize]
-    }
-
-    #[inline]
-    fn write(&mut self, addr: Word, val: Byte) {
-        if self.readonly {
-            return;
-        }
-
-        self.data[addr as usize] = val;
-    }
-
-    fn tick(&mut self) {
-        // No timing behavior for memory devices
-    }
-}
-
-pub struct RAM64K {
-    data: [Byte; 0xFFFF + 1],
-}
-
-impl RAM64K {
-    #[must_use]
-    #[allow(clippy::large_stack_arrays)]
-    pub fn new() -> Self {
-        Self {
-            data: [0; (0xFFFF + 1)],
-        }
-    }
-}
-
-impl Device for RAM64K {
-    fn read(&mut self, addr: Word) -> Byte {
-        self.data[addr as usize]
-    }
-
-    fn write(&mut self, addr: Word, val: Byte) {
-        self.data[addr as usize] = val;
-    }
-
-    fn tick(&mut self) {}
 }
 
 struct BusMapping {
@@ -143,7 +43,7 @@ impl BusMapping {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BusOp {
     Read(Word, Byte),
     Write(Word, Byte),
@@ -261,6 +161,7 @@ impl Bus {
             self.irq &= device.irq();
             self.nmi &= device.nmi();
             self.res &= device.res();
+            self.rdy &= device.rdy();
         }
 
         self.last_op = BusOp::Internal; // reset operation for next cycle

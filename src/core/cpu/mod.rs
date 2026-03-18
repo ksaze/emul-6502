@@ -8,10 +8,11 @@ mod state;
 use crate::core::variants::{Decoder, Quirks};
 
 pub(super) use core::CPUCore;
-pub(super) use flags::Status;
-pub(super) use signals::Signals;
 pub(super) use stack::StackPointer;
-pub(super) use state::CPUState;
+
+pub(crate) use flags::Status;
+pub(crate) use signals::Signals;
+pub(crate) use state::CPUState;
 
 pub struct CPU<V: Decoder + Quirks> {
     pub core: CPUCore,

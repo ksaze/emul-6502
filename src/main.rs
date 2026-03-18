@@ -1,36 +1,26 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
-
-use mos65x::core::bus::BusOp;
 use mos65x::core::variants::NMOS_6502;
-use mos65x::emulator::Emulator;
-
-mod core;
-mod emulator;
-mod shared;
+use mos65x::driver::BasicDriver;
+use mos65x::generic_system::GenericSystem;
 
 fn main() {
-    let mut emul = Emulator::new(NMOS_6502);
-    // Full RAM
-    emul.attach_ram(0x0000, 0x10000);
-    emul.bus.write_raw(0x0, 0x58);
-    emul.bus.write_raw(0x1, 0xE8);
-    emul.bus.write_raw(0x2, 0xD0);
-    emul.bus.write_raw(0x3, 0xFE);
+    let mut system = GenericSystem::new(NMOS_6502);
 
-    for _ in 0..14 {
-        let op = emul.tick();
-        match op {
-            BusOp::Read(addr, data) => {
-                println!("read {:#4X} {:#4X}", addr, data);
-            }
-            BusOp::Write(addr, data) => {
-                println!("write {:#4X} {:#4X}", addr, data);
-            }
-            BusOp::Internal => {
-                println!("Internal");
-            }
-        }
+    // 64KB RAM
+    system.attach_ram(0x0000, 0x10000);
+
+    for i in 0..0xFFEF {
+        system.bus.write_raw(i, 0xE8);
     }
-    print!("{}", emul.cpu.core.instr.name);
+    system.bus.write_raw(0xFFEF, 0xFF);
+
+    // Reset vector -> $0000
+    system.bus.write_raw(0xFFFC, 0x00);
+    system.bus.write_raw(0xFFFD, 0x00);
+
+    let mut driver = BasicDriver::new(system);
+    driver.execute();
+    //     let mut driver = DebugDriver::new(system);
+    //     driver.run().unwrap();
 }

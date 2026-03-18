@@ -1,4 +1,5 @@
 #[allow(non_snake_case)]
+#[derive(Clone, Copy, Debug)]
 pub struct Signals {
     pub RES_sync: bool,
     pub IRQ_sync: bool,

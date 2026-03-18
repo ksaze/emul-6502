@@ -45,12 +45,8 @@ impl Instruction {
             };
         }
 
-        let name = if combine!(
-            AddressingModeFlag::NONE,
-            AddressingModeFlag::IMPLIED,
-            AddressingModeFlag::RELATIVE
-        )
-        .contains(addressing.flag)
+        let name = if combine!(AddressingModeFlag::NONE, AddressingModeFlag::IMPLIED,)
+            .contains(addressing.flag)
         {
             String::from(operation.name)
         } else {

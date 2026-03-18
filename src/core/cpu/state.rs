@@ -1,4 +1,4 @@
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum RdyResumeState {
     Fetch,
     Exec,
@@ -6,7 +6,7 @@ pub enum RdyResumeState {
     Reset,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CPUState {
     Fetch,
     Exec,
