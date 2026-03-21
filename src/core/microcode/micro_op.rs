@@ -43,6 +43,13 @@ macro_rules! micro_op {
         )
     };
 
+    ((WRITE |$cpu:ident| $data_expr:expr => $target:ident) $action:expr) => {
+        micro_op!(@impl
+            (WRITE micro_op!(@reg_addr $target), |$cpu| $data_expr)
+            $action
+        )
+    };
+
     (@impl (READ $addr:expr) $action:expr) => {
         MicroOp {
             external: BusOpSpec::Read {

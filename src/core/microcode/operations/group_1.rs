@@ -4,7 +4,6 @@ use super::prelude::*;
 use super::shared_macros::*;
 
 const G1_MODES: AddressingModeFlag = combine!(
-    AddressingModeFlag::ACCUMULATOR,
     AddressingModeFlag::IMMEDIATE,
     AddressingModeFlag::ZERO_PAGE,
     AddressingModeFlag::ZERO_PAGE_X,

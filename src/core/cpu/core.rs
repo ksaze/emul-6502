@@ -51,6 +51,13 @@ impl CPUCore {
         (self.quirks.ind_addr_inc)(addr)
     }
 
+    pub fn set_binarymode_flags(&mut self, a: u16, m: u16, result: u16) {
+        self.flags.set(Status::CARRY, result > 0xFF);
+        self.flags
+            .set(Status::OVERFLOW, (!(a ^ m) & (a ^ result) & 0x80) != 0);
+        self.flags.set_nz(result as Byte);
+    }
+
     #[inline]
     pub fn alu_shl(&mut self, value: Byte) -> Byte {
         self.flags.set(Status::CARRY, value & 0x80 != 0);

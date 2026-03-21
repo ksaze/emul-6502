@@ -11,7 +11,7 @@ pub struct BasicDriver<S: SystemInterface> {
 
 impl<S: SystemInterface> BasicDriver<S> {
     pub fn new(system: S) -> Self {
-        Self { system: system }
+        Self { system }
     }
 
     pub fn run_cycles(&mut self, n: usize) {

@@ -24,7 +24,7 @@ pub static JAM: Operation = Operation {
     valid_modes: AddressingModeFlag::NONE,
     typ: OperationType::Timing,
     micro: &[micro_op!(
-        (READ pc) // pc + 1 required
+        (READ tmp16) // pc + 1 stored in tmp16
         |cpu| {
             cpu.state = CPUState::Jammed;
             StepCtl::Next

@@ -11,6 +11,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
+
 use std::io;
 
 use crate::core::bus::{BusOp, Device};
@@ -337,7 +338,7 @@ impl<S: SystemInterface> DebugDriver<S> {
     // ── Draw ─────────────────────────────────────────────────────────────────
 
     fn draw(&mut self, f: &mut Frame, snapshot: &SystemSnapshot) {
-        let area = f.size();
+        let area = f.area();
         f.render_widget(Block::default().style(Style::default().bg(C_BG)), area);
 
         let root = Layout::default()
@@ -709,7 +710,7 @@ impl<S: SystemInterface> DebugDriver<S> {
                     .add_modifier(Modifier::UNDERLINED),
             ),
         )
-        .highlight_style(
+        .row_highlight_style(
             Style::default()
                 .bg(Color::Rgb(38, 38, 58))
                 .add_modifier(Modifier::BOLD),

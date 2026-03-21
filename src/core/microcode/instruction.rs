@@ -40,7 +40,7 @@ impl Instruction {
         if !(operation.valid_modes.contains(addressing.flag)) {
             return Instruction {
                 name: format!("{} {}", "NOP", addressing.name),
-                addressing: addressing,
+                addressing,
                 operation: &NOP,
             };
         }
@@ -55,8 +55,8 @@ impl Instruction {
 
         Instruction {
             name,
-            addressing: addressing,
-            operation: operation,
+            addressing,
+            operation,
         }
     }
 

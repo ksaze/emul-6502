@@ -1,12 +1,12 @@
-use crate::shared::{Byte, Word};
 use crate::core::variants::ALUOuput;
+use crate::shared::Word;
 
 use super::instruction::AddressingMode;
-use super::types::*;
 use super::micro_op::*;
+use super::types::*;
 
 static READ_LO_BYTE: MicroOp = micro_op!(
-    (READ pc) 
+    (READ pc)
     |cpu| {
         cpu.tmp8 = cpu.data_bus;
         cpu.pc = cpu.pc.wrapping_add(1);
@@ -34,8 +34,7 @@ pub static IMPLIED: AddressingMode = AddressingMode {
     name: "IMPLIED",
     flag: AddressingModeFlag::IMPLIED,
     micro: &[micro_op!(
-        (INTERNAL)
-        |cpu| {
+        (INTERNAL) | cpu | {
             // DUMMY READ
             cpu.eff_addr = cpu.pc;
             StepCtl::Merge
@@ -47,8 +46,7 @@ pub static ACCUMULATOR: AddressingMode = AddressingMode {
     name: "A",
     flag: AddressingModeFlag::ACCUMULATOR,
     micro: &[micro_op!(
-        (INTERNAL)
-        |cpu| {
+        (INTERNAL) | cpu | {
             // DUMMY READ
             cpu.eff_addr = cpu.pc;
             StepCtl::Merge
@@ -60,8 +58,7 @@ pub static IMMEDIATE: AddressingMode = AddressingMode {
     name: "#imm",
     flag: AddressingModeFlag::IMMEDIATE,
     micro: &[micro_op!(
-        (INTERNAL)
-        |cpu| {
+        (INTERNAL) | cpu | {
             cpu.eff_addr = cpu.pc;
             cpu.pc = cpu.pc.wrapping_add(1);
             StepCtl::Merge
@@ -144,8 +141,8 @@ pub static ABSOLUTE: AddressingMode = AddressingMode {
                 // for JMP 
                 if cpu.instr.operation.typ == OperationType::Control {
                     StepCtl::Merge
-                } else { 
-                    StepCtl::Next 
+                } else {
+                    StepCtl::Next
                 }
             }
         ),
@@ -166,7 +163,7 @@ pub static ABS_IND: AddressingMode = AddressingMode {
                 match cpu.ind_addr_inc(cpu.tmp16) {
                     ALUOuput::Done(addr) => {
                         cpu.tmp16 = addr;
-                        StepCtl::Skip(1)
+                        StepCtl::Skip
                     }
                     ALUOuput::Penalty(addr) => {
                         cpu.tmp16 = addr;
@@ -207,13 +204,13 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
                 cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, cpu.data_bus]);
                 cpu.pc = cpu.pc.wrapping_add(1);
 
-                cpu.tmp8 = (cpu.tmp16 & 0xFF) as Byte;
+                // tmp8 already holds low byte
                 cpu.crossed = cpu.tmp8.wrapping_add(cpu.x) < cpu.tmp8;
                 cpu.tmp16 = (cpu.tmp16 & 0xFF00) | (cpu.tmp8.wrapping_add(cpu.x) as Word);
 
                 if !cpu.crossed && cpu.instr.operation.typ == OperationType::Read {
                     cpu.eff_addr = cpu.tmp16;
-                    StepCtl::Skip(2)
+                    StepCtl::Skip
                 } else {
                     StepCtl::Next
                 }
@@ -223,28 +220,12 @@ pub static ABSOLUTE_X: AddressingMode = AddressingMode {
         micro_op!(
             (READ tmp16) // DUMMY READ
             |cpu| {
-                if cpu.crossed || cpu.instr.operation.typ == OperationType::RMW {
-                    StepCtl::Next
-                } else if !cpu.crossed && cpu.instr.operation.typ == OperationType::Store {
-                    // read already done this cycle. Next cycle required for store
-                    cpu.eff_addr = cpu.tmp16;
-                    StepCtl::Skip(1)
-                } else {
-                    StepCtl::SkipMerge
-                }
-            }
-        ),
-    
-        micro_op!(
-            (INTERNAL)
-            |cpu| {
                 if cpu.crossed {
-                    // Fix high byte
                     cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
-                    cpu.crossed = false;
                 }
+
                 cpu.eff_addr = cpu.tmp16;
-                StepCtl::Merge
+                StepCtl::Next
             }
         )
     ],
@@ -262,13 +243,13 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
                 cpu.tmp16 = Word::from_le_bytes([cpu.tmp8, cpu.data_bus]);
                 cpu.pc = cpu.pc.wrapping_add(1);
 
-                cpu.tmp8 = (cpu.tmp16 & 0xFF) as Byte;
+                // tmp8 already has low byte 
                 cpu.crossed = cpu.tmp8.wrapping_add(cpu.y) < cpu.tmp8;
                 cpu.tmp16 = (cpu.tmp16 & 0xFF00) | (cpu.tmp8.wrapping_add(cpu.y) as Word);
 
                 if !cpu.crossed && cpu.instr.operation.typ == OperationType::Read {
                     cpu.eff_addr = cpu.tmp16;
-                    StepCtl::Skip(2)
+                    StepCtl::Skip
                 } else {
                     StepCtl::Next
                 }
@@ -278,33 +259,16 @@ pub static ABSOLUTE_Y: AddressingMode = AddressingMode {
         micro_op!(
             (READ tmp16) // DUMMY READ
             |cpu| {
-                if cpu.crossed || cpu.instr.operation.typ == OperationType::RMW {
-                    StepCtl::Next
-                } else if !cpu.crossed && cpu.instr.operation.typ == OperationType::Store {
-                    // read already done this cycle. Next cycle required for store
-                    cpu.eff_addr = cpu.tmp16;
-                    StepCtl::Skip(1)
-                } else {
-                    StepCtl::SkipMerge
-                }
-            }
-        ),
-    
-        micro_op!(
-            (INTERNAL)
-            |cpu| {
                 if cpu.crossed {
-                    // Fix high byte
                     cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
-                    cpu.crossed = false;
                 }
+
                 cpu.eff_addr = cpu.tmp16;
-                StepCtl::Merge
+                StepCtl::Next
             }
         )
     ],
 };
-
 
 pub static IDX_IND: AddressingMode = AddressingMode {
     name: "(zp,X)",
@@ -355,40 +319,28 @@ pub static IND_IDX: AddressingMode = AddressingMode {
             |cpu| {
                 cpu.tmp16 |= (cpu.data_bus as Word) << 8;
 
-                cpu.tmp8 = (cpu.tmp16 & 0xFF) as Byte;
+                cpu.tmp8 = cpu.tmp16.to_le_bytes()[0];
                 cpu.crossed = cpu.tmp8.wrapping_add(cpu.y) < cpu.tmp8;
                 cpu.tmp16 = (cpu.tmp16 & 0xFF00) | (cpu.tmp8.wrapping_add(cpu.y) as Word);
 
                 if !cpu.crossed && cpu.instr.operation.typ == OperationType::Read {
                     cpu.eff_addr = cpu.tmp16;
-                    StepCtl::Skip(2)
+                    StepCtl::Skip
                 } else {
                     StepCtl::Next
                 }
             }
         ),
-
         micro_op!(
             (READ tmp16) // DUMMY
             |cpu| {
                 if cpu.crossed {
-                    StepCtl::Next
-                } else if !cpu.crossed && cpu.instr.operation.typ == OperationType::Store {
-                    // read already done this cycle. Next cycle required for store
-                    cpu.eff_addr = cpu.tmp16;
-                    StepCtl::Skip(1)
-                } else {
-                    StepCtl::SkipMerge
+                    cpu.tmp16 = cpu.tmp16.wrapping_add(1 << 8);
                 }
+
+                cpu.eff_addr = cpu.tmp16;
+                StepCtl::Next
             }
         ),
-        micro_op!(
-            (INTERNAL)
-            |cpu| {
-                // Fix high byte
-                cpu.eff_addr = cpu.tmp16.wrapping_add(1 << 8);
-                StepCtl::Merge
-            }
-        )
     ],
 };

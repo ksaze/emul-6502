@@ -66,7 +66,7 @@ impl Bus {
         Self {
             mappings: Vec::new(),
             last_op: BusOp::Internal,
-            data_bus: 0x0,
+            data_bus: 0xFF,
             addr_bus: 0xFF,
             irq: true,
             nmi: true,

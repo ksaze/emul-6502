@@ -41,9 +41,8 @@ macro_rules! compare {
             micro: &[micro_op!(
                 (READ eff_addr)
                 |cpu| {
-                    cpu.tmp8 = cpu.data_bus;
-                    cpu.flags.set(Status::CARRY, cpu.$register >= cpu.tmp8);
-                    cpu.flags.set_nz(cpu.$register.wrapping_sub(cpu.tmp8));
+                    cpu.flags.set(Status::CARRY, cpu.$register >= cpu.data_bus);
+                    cpu.flags.set_nz(cpu.$register.wrapping_sub(cpu.data_bus));
                     StepCtl::End
                 }
             )],

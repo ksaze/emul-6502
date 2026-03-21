@@ -55,7 +55,7 @@ impl<V: Decoder + Quirks> CPU<V> {
                 BusOpSpec::Internal => {
                     internal_count += 1;
                     assert!(
-                        internal_count <= 1,
+                        internal_count <= 5,
                         "Detected multiple consecutive internal cycles."
                     );
                     let ctrl = self
@@ -64,10 +64,6 @@ impl<V: Decoder + Quirks> CPU<V> {
 
                     match ctrl {
                         StepCtl::Merge => continue,
-                        StepCtl::SkipMerge => {
-                            self.core.micro_iter.as_mut().unwrap().next();
-                            continue;
-                        }
                         _ => {
                             panic!(
                                 "Non merge micro_op control state returned while trying to execute internal operation."
@@ -132,10 +128,7 @@ impl<V: Decoder + Quirks> CPU<V> {
                 self.core.rw = true;
             }
             CPUState::Exec => self.get_external_operation(),
-            CPUState::Jammed => {
-                self.core.addr_bus = self.core.pc.wrapping_sub(1);
-                self.core.rw = true;
-            }
+            CPUState::Jammed => { /* Address Bus Latch persists */ }
             CPUState::Blocked(_) => {
                 panic!("Tried to set external operation while CPU was blocked.");
             }
@@ -170,6 +163,8 @@ impl<V: Decoder + Quirks> CPU<V> {
 
                 self.core.instr = instr;
                 if self.core.instr.name.eq("JAM") {
+                    // PC + 1 -> Address bus next cycle
+                    self.core.tmp16 = self.core.pc;
                     self.core.pc = self.core.pc.wrapping_sub(1);
                 }
 
@@ -254,33 +249,12 @@ impl<V: Decoder + Quirks> CPU<V> {
                     break;
                 }
 
-                StepCtl::Skip(n) => {
-                    for _ in 0..n {
-                        self.core.micro_iter.as_mut().unwrap().next(); // skip fake stall micro-op
-                    }
+                StepCtl::Skip => {
+                    self.core.micro_iter.as_mut().unwrap().next(); // skip fake stall micro-op
                     break;
                 }
 
                 StepCtl::Merge => {
-                    #[rustfmt::skip]
-                    let micro = self.core.micro_iter
-                        .as_mut()
-                        .unwrap()
-                        .next()
-                        .expect("Iterator ended on Merge without StepCtl::End");
-
-                    assert!(
-                        matches!(micro.bus_spec(), BusOpSpec::Internal),
-                        "Micro-op following a clocked Merge must be Internal. IR=${:02X} PC=${:04X}",
-                        self.core.ir,
-                        self.core.pc
-                    );
-                    self.core.micro_op = Some(micro);
-                    continue;
-                }
-
-                StepCtl::SkipMerge => {
-                    self.core.micro_iter.as_mut().unwrap().next(); // skip fake stall micro-op
                     #[rustfmt::skip]
                     let micro = self.core.micro_iter
                         .as_mut()

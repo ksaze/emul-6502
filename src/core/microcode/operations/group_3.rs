@@ -55,7 +55,7 @@ pub static CPY: Operation = compare!(
     y,
     G3_MODES.clear(&[
         AddressingModeFlag::ZERO_PAGE_X,
-        AddressingModeFlag::ZERO_PAGE_Y
+        AddressingModeFlag::ABSOLUTE_X
     ])
 );
 pub static CPX: Operation = compare!(
@@ -63,6 +63,6 @@ pub static CPX: Operation = compare!(
     x,
     G3_MODES.clear(&[
         AddressingModeFlag::ZERO_PAGE_X,
-        AddressingModeFlag::ZERO_PAGE_Y
+        AddressingModeFlag::ABSOLUTE_X
     ])
 );

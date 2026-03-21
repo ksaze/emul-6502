@@ -72,7 +72,7 @@ pub static BRK: Operation = Operation {
                 cpu.signals.VEC_next_cycle = false;
                 if cpu.signals.res_hijack && cpu.signals.RESP {
                     cpu.pc = Word::from_le_bytes([0xFD, cpu.tmp8]);
-                    StepCtl::Skip(1)
+                    StepCtl::Skip
                 } else if cpu.signals.res_hijack && !cpu.signals.RESP {
                     cpu.pc = Word::from_le_bytes([0xFD, cpu.tmp8]);
                     StepCtl::End

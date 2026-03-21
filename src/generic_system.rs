@@ -2,9 +2,11 @@ use crate::core::bus::{Bus, BusOp, Device};
 use crate::core::cpu::CPU;
 use crate::core::variants::{Decoder, Quirks};
 use crate::devices::{DMAController, MemoryDevice};
+#[cfg(feature = "driver")]
 use crate::driver::{SystemInterface, SystemSnapshot};
 use crate::shared::*;
 
+#[cfg(feature = "driver")]
 enum Phase {
     Phi1,
     Phi2,
@@ -17,6 +19,7 @@ where
     pub cpu: CPU<V>,
     pub bus: Bus,
     pub dmas: Vec<SharedDevice<dyn DMAController>>,
+    #[cfg(feature = "driver")]
     phase: Phase,
 }
 
@@ -26,6 +29,7 @@ impl<V: Decoder + Quirks> GenericSystem<V> {
             cpu: CPU::new(variant),
             bus: Bus::new(),
             dmas: Vec::new(),
+            #[cfg(feature = "driver")]
             phase: Phase::Phi1,
         }
     }
@@ -91,6 +95,7 @@ impl<V: Decoder + Quirks> GenericSystem<V> {
     }
 }
 
+#[cfg(feature = "driver")]
 impl<V: Decoder + Quirks> SystemInterface for GenericSystem<V> {
     fn tick(&mut self) {
         match self.phase {

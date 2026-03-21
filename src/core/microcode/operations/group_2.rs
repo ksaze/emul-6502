@@ -12,7 +12,7 @@ const G2_MODES: AddressingModeFlag = combine!(
 
 macro_rules! alu_rmw {
     // RMW operations with accumulator mode support
-    ($name:literal, with_acc, $modify:expr) => {
+    ($name:literal, G2_with_acc, $modify:expr) => {
         alu_rmw!(@impl $name,
              G2_MODES.clear(&[AddressingModeFlag::IMMEDIATE]),
              true,
@@ -20,9 +20,17 @@ macro_rules! alu_rmw {
     };
 
     // RMW operations without accumulator mode (INC/DEC)
-    ($name:literal, no_acc, $modify:expr) => {
+    ($name:literal, G2_no_acc, $modify:expr) => {
         alu_rmw!(@impl $name,
              G2_MODES.clear(&[AddressingModeFlag::IMMEDIATE, AddressingModeFlag::ACCUMULATOR]),
+             false,
+             $modify)
+    };
+
+    // Undocumented operation combining RMW operations
+    ($name:literal, G1, $modify:expr) => {
+        alu_rmw!(@impl $name,
+             G1_MODES.clear(&[AddressingModeFlag::IMMEDIATE]),
              false,
              $modify)
     };
@@ -66,19 +74,21 @@ macro_rules! alu_rmw {
     };
 }
 
-pub static ASL: Operation = alu_rmw!("ASL", with_acc, |cpu: &mut CPUCore| {
+pub(super) use alu_rmw;
+
+pub static ASL: Operation = alu_rmw!("ASL", G2_with_acc, |cpu: &mut CPUCore| {
     cpu.tmp8 = cpu.alu_shl(cpu.tmp8)
 });
 
-pub static LSR: Operation = alu_rmw!("LSR", with_acc, |cpu: &mut CPUCore| {
+pub static LSR: Operation = alu_rmw!("LSR", G2_with_acc, |cpu: &mut CPUCore| {
     cpu.tmp8 = cpu.alu_shr(cpu.tmp8)
 });
 
-pub static ROL: Operation = alu_rmw!("ROL", with_acc, |cpu: &mut CPUCore| {
+pub static ROL: Operation = alu_rmw!("ROL", G2_with_acc, |cpu: &mut CPUCore| {
     cpu.tmp8 = cpu.alu_rol(cpu.tmp8)
 });
 
-pub static ROR: Operation = alu_rmw!("ROR", with_acc, |cpu: &mut CPUCore| {
+pub static ROR: Operation = alu_rmw!("ROR", G2_with_acc, |cpu: &mut CPUCore| {
     cpu.tmp8 = cpu.alu_ror(cpu.tmp8)
 });
 
@@ -105,12 +115,12 @@ pub static LDX: Operation = load!(
 );
 
 // Inc/Dec operations don't support accumulator addressing mode
-pub static INC: Operation = alu_rmw!("INC", no_acc, |cpu: &mut CPUCore| {
+pub static INC: Operation = alu_rmw!("INC", G2_no_acc, |cpu: &mut CPUCore| {
     cpu.tmp8 = cpu.tmp8.wrapping_add(1);
     cpu.flags.set_nz(cpu.tmp8);
 });
 
-pub static DEC: Operation = alu_rmw!("DEC", no_acc, |cpu: &mut CPUCore| {
+pub static DEC: Operation = alu_rmw!("DEC", G2_no_acc, |cpu: &mut CPUCore| {
     cpu.tmp8 = cpu.tmp8.wrapping_sub(1);
     cpu.flags.set_nz(cpu.tmp8);
 });

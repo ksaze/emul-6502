@@ -7,9 +7,8 @@ use crate::shared::{Byte, Word};
 pub enum StepCtl {
     Next,
     End,
-    Skip(usize),
+    Skip,
     Merge,
-    SkipMerge,
 }
 
 #[derive(Copy, Clone, Debug)]

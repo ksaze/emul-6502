@@ -1,8 +1,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
-use mos65x::core::variants::NMOS_6502;
-use mos65x::driver::BasicDriver;
-use mos65x::generic_system::GenericSystem;
+use mos65x::{core::variants::NMOS_6502, generic_system::GenericSystem};
 
 fn main() {
     let mut system = GenericSystem::new(NMOS_6502);
@@ -18,9 +16,6 @@ fn main() {
     // Reset vector -> $0000
     system.bus.write_raw(0xFFFC, 0x00);
     system.bus.write_raw(0xFFFD, 0x00);
-
-    let mut driver = BasicDriver::new(system);
-    driver.execute();
     //     let mut driver = DebugDriver::new(system);
     //     driver.run().unwrap();
 }
