@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use crate::core::cpu::CPUCore;
-use crate::shared::{Byte, Word};
+use crate::core::{Byte, Word};
 
 #[derive(Copy, Clone)]
 pub enum StepCtl {

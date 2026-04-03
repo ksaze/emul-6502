@@ -1,6 +1,6 @@
 use crate::core::microcode::{Instruction, MicroOp};
 use crate::core::variants::{ALUOuput, VariantQuirks};
-use crate::shared::{Byte, Word};
+use crate::core::{Byte, Word};
 
 use super::{CPUState, Signals, StackPointer, Status};
 

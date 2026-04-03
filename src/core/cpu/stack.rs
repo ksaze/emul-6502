@@ -1,4 +1,4 @@
-use crate::shared::{Byte, Word};
+use crate::core::{Byte, Word};
 
 pub struct StackPointer {
     pub value: Byte,

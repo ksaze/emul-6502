@@ -1,4 +1,4 @@
-use crate::core::bus::Bus;
+use crate::core::bus::BusMaster;
 use crate::core::microcode::{BusOpSpec, Instruction, StepCtl};
 use crate::core::variants::{Decoder, Quirks};
 
@@ -191,13 +191,13 @@ impl<V: Decoder + Quirks> CPU<V> {
         }
     }
 
-    pub fn phi2(&mut self, bus: &mut Bus) {
+    pub fn phi2<B: BusMaster + Sized>(&mut self, bus: &mut B) {
         // synchronise external lines
-        self.core.signals.RES_sync = bus.res;
-        self.core.signals.NMIP = !bus.nmi;
-        self.core.signals.IRQ_sync = !bus.irq;
+        self.core.signals.RES_sync = bus.res();
+        self.core.signals.NMIP = !bus.nmi();
+        self.core.signals.IRQ_sync = !bus.irq();
 
-        match (self.core.rw, bus.rdy, &self.core.state) {
+        match (self.core.rw, bus.rdy(), &self.core.state) {
             // Read cycle with RDY low — block and elongate
             (true, false, state) if !matches!(state, CPUState::Blocked(_)) => {
                 self.core.state = self.core.state.block();

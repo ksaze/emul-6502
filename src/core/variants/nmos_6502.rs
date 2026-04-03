@@ -1,8 +1,8 @@
+use crate::core::Byte;
 use crate::core::cpu::Status;
 use crate::core::microcode::Instruction;
 use crate::core::microcode::addressing_modes::*;
 use crate::core::microcode::operations::*;
-use crate::shared::Byte;
 
 use super::helpers::*;
 use super::traits::{ALUOuput, VariantQuirks};

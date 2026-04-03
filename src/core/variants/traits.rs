@@ -1,6 +1,6 @@
 use crate::core::cpu::CPUCore;
 use crate::core::microcode::Instruction;
-use crate::shared::{Byte, Word};
+use crate::core::{Byte, Word};
 
 pub enum ALUOuput<T> {
     Done(T),

@@ -1,6 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
-
-use crate::shared::{Byte, SharedDevice, Word};
+use crate::core::{Byte, Word};
 
 pub trait Device {
     fn read(&mut self, addr: Word) -> Byte;
@@ -19,27 +17,26 @@ pub trait Device {
     fn rdy(&self) -> bool {
         true
     }
-    fn into_shared(self) -> SharedDevice<Self>
-    where
-        Self: Sized + 'static,
-    {
-        Rc::new(RefCell::new(self)) as SharedDevice<Self>
-    }
 }
 
-struct BusMapping {
-    pub base: Word,
-    pub mask: Word,
-    pub device: SharedDevice<dyn Device>,
+pub trait DeviceHandle<D: ?Sized + 'static> {
+    fn with<R>(&mut self, f: impl for<'a> FnOnce(&'a mut D) -> R) -> R;
 }
 
-impl BusMapping {
+pub struct BusMapping<H: DeviceHandle<dyn Device>> {
+    pub map_base: Word,
+    pub map_mask: Word,
+    pub addr_mask: Word,
+    pub device: H,
+}
+
+impl<H: DeviceHandle<dyn Device>> BusMapping<H> {
     fn maps(&self, addr: Word) -> bool {
-        (addr & self.mask) == self.base
+        (addr & self.map_mask) == self.map_base
     }
 
     fn offset(&self, addr: Word) -> Word {
-        addr & !self.mask
+        addr & !self.addr_mask
     }
 }
 
@@ -50,18 +47,18 @@ pub enum BusOp {
     Internal,
 }
 
-pub struct Bus {
-    mappings: Vec<BusMapping>,
+pub struct Bus<H: DeviceHandle<dyn Device>> {
+    mappings: Vec<BusMapping<H>>,
     data_bus: Byte,
     addr_bus: Word,
     pub last_op: BusOp,
-    pub irq: bool,
-    pub nmi: bool,
-    pub res: bool,
+    pub(super) irq: bool,
+    pub(super) nmi: bool,
+    pub(super) res: bool,
     pub rdy: bool,
 }
 
-impl Bus {
+impl<H: DeviceHandle<dyn Device>> Bus<H> {
     pub fn new() -> Self {
         Self {
             mappings: Vec::new(),
@@ -75,29 +72,22 @@ impl Bus {
         }
     }
 
-    // Device is not cloned
-    pub fn attach_device<D: Device + 'static>(&mut self, device: D, base: Word, mask: Word) {
-        self.mappings.push(BusMapping {
-            base,
-            mask,
-            device: device.into_shared(),
-        });
-    }
-
-    pub fn attach_shared_device<D: Device + 'static>(
+    pub fn attach_device_handle(
         &mut self,
-        device: &SharedDevice<D>,
-        base: Word,
-        mask: Word,
+        device: H,
+        map_base: Word,
+        map_mask: Word,
+        addr_mask: Word,
     ) {
         self.mappings.push(BusMapping {
-            base,
-            mask,
-            device: device.clone(),
-        });
+            map_base,
+            map_mask,
+            addr_mask,
+            device,
+        })
     }
 
-    fn find_device_mut(&mut self, addr: Word) -> Option<&mut BusMapping> {
+    fn find_device_mut(&mut self, addr: Word) -> Option<&mut BusMapping<H>> {
         self.mappings.iter_mut().find(|map| map.maps(addr))
     }
 
@@ -107,7 +97,8 @@ impl Bus {
         }
 
         if let Some(map) = self.find_device_mut(addr) {
-            let val = map.device.borrow_mut().read(map.offset(addr));
+            let offset = map.offset(addr);
+            let val = map.device.with(|dev| dev.read(offset));
             self.data_bus = val;
             self.last_op = BusOp::Read(addr, val);
             self.addr_bus = addr;
@@ -128,14 +119,16 @@ impl Bus {
         self.addr_bus = addr;
 
         if let Some(map) = self.find_device_mut(addr) {
-            map.device.borrow_mut().write(map.offset(addr), val);
+            let offset = map.offset(addr);
+            map.device.with(|dev| dev.write(offset, val));
         }
     }
 
     #[cfg(feature = "test-utils")]
     pub fn read_raw(&mut self, addr: Word) -> Byte {
         if let Some(map) = self.find_device_mut(addr) {
-            let val = map.device.borrow_mut().read(map.offset(addr));
+            let offset = map.offset(addr);
+            let val = map.device.with(|dev| dev.read(offset));
             val
         } else {
             self.data_bus
@@ -145,7 +138,8 @@ impl Bus {
     #[cfg(feature = "test-utils")]
     pub fn write_raw(&mut self, addr: Word, val: Byte) {
         if let Some(map) = self.find_device_mut(addr) {
-            map.device.borrow_mut().write(map.offset(addr), val);
+            let offset = map.offset(addr);
+            map.device.with(|dev| dev.write(offset, val));
         }
     }
 
@@ -153,17 +147,51 @@ impl Bus {
         self.irq = true;
         self.nmi = true;
         self.res = true;
+        self.rdy = true;
 
         for map in self.mappings.iter_mut() {
-            let mut device = map.device.borrow_mut();
-
-            device.tick();
-            self.irq &= device.irq();
-            self.nmi &= device.nmi();
-            self.res &= device.res();
-            self.rdy &= device.rdy();
+            map.device.with(|device| {
+                device.tick();
+                self.irq &= device.irq();
+                self.nmi &= device.nmi();
+                self.res &= device.res();
+                self.rdy &= device.rdy();
+            })
         }
 
         self.last_op = BusOp::Internal; // reset operation for next cycle
+    }
+}
+
+// Interface exposed to Bus Masters (CPU, DMA)
+pub trait BusMaster {
+    fn read(&mut self, addr: Word) -> Byte;
+    fn write(&mut self, addr: Word, val: Byte);
+
+    fn rdy(&self) -> bool;
+    fn irq(&self) -> bool;
+    fn nmi(&self) -> bool;
+    fn res(&self) -> bool;
+}
+
+impl<H: DeviceHandle<dyn Device>> BusMaster for Bus<H> {
+    fn read(&mut self, addr: Word) -> Byte {
+        self.read(addr)
+    }
+    fn write(&mut self, addr: Word, val: Byte) {
+        self.write(addr, val)
+    }
+
+    fn rdy(&self) -> bool {
+        self.rdy
+    }
+    fn irq(&self) -> bool {
+        self.irq
+    }
+    fn nmi(&self) -> bool {
+        self.nmi
+    }
+    fn res(&self) -> bool {
+        self.res
     }
 }

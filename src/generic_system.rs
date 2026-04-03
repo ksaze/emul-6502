@@ -1,10 +1,13 @@
-use crate::core::bus::{Bus, BusOp, Device};
+use crate::core::bus::{Bus, BusOp, Device, DeviceHandle};
 use crate::core::cpu::CPU;
 use crate::core::variants::{Decoder, Quirks};
+use crate::core::{Byte, Word};
+#[cfg(feature = "driver")]
+use crate::devices::EmulatorControl;
 use crate::devices::{DMAController, MemoryDevice};
 #[cfg(feature = "driver")]
 use crate::driver::{SystemInterface, SystemSnapshot};
-use crate::shared::*;
+use crate::handles::{IntoDMAHandle, IntoHandle, OwnedDeviceDyn, SharedDeviceDyn, SyncDeviceDyn};
 
 #[cfg(feature = "driver")]
 enum Phase {
@@ -12,19 +15,28 @@ enum Phase {
     Phi2,
 }
 
-pub struct GenericSystem<V>
+pub type BoxSystem<V> = GenericSystem<V, OwnedDeviceDyn>;
+pub type RcSystem<V> = GenericSystem<V, SharedDeviceDyn>;
+pub type ArcSystem<V> = GenericSystem<V, SyncDeviceDyn>;
+
+pub struct GenericSystem<V, H>
 where
     V: Decoder + Quirks,
+    H: DeviceHandle<dyn Device> + 'static,
 {
     pub cpu: CPU<V>,
-    pub bus: Bus,
-    pub dmas: Vec<SharedDevice<dyn DMAController>>,
+    pub bus: Bus<H>,
+    dmas: Vec<Box<dyn DMAController>>,
     #[cfg(feature = "driver")]
     phase: Phase,
 }
 
-impl<V: Decoder + Quirks> GenericSystem<V> {
-    pub fn new(variant: V) -> GenericSystem<V> {
+impl<V, H> GenericSystem<V, H>
+where
+    V: Decoder + Quirks,
+    H: DeviceHandle<dyn Device> + 'static,
+{
+    pub fn new(variant: V) -> GenericSystem<V, H> {
         Self {
             cpu: CPU::new(variant),
             bus: Bus::new(),
@@ -34,42 +46,93 @@ impl<V: Decoder + Quirks> GenericSystem<V> {
         }
     }
 
-    pub fn attach_dma<D>(&mut self, dma: D, base_addr: Word, size: usize)
+    pub fn attach_device<D>(
+        &mut self,
+        device: D,
+        base_addr: Word,
+        size: usize,
+        mirrors: u8,
+    ) -> Option<<D as IntoHandle<H>>::ConcreteHandle>
     where
-        D: Device + DMAController + 'static,
+        H: DeviceHandle<dyn Device> + 'static,
+        D: IntoHandle<H> + 'static,
+        <D as IntoHandle<H>>::ConcreteHandle: DeviceHandle<D>,
     {
-        assert!(size.is_power_of_two(), "Device size must be a power of two");
-        assert!(size <= (0xFFFF + 1), "Device size exceeds address space");
+        let (map_mask, base_addr) = if size == 0 {
+            (0x0, 0xFFFF)
+        } else {
+            assert!(
+                size * mirrors as usize <= 0xFFFF + 1,
+                "size * mirrors exceeds address space"
+            );
+            assert!(size.is_power_of_two());
+            assert!(mirrors >= 1, "mirrors must be at least 1");
+            assert!(mirrors.is_power_of_two(), "mirrors must be a power of two");
+            assert!(
+                (base_addr as usize & (size * mirrors as usize - 1)) == 0,
+                "base address must be aligned to size * mirrors"
+            );
 
-        let dma_shared = dma.into_shared();
-        self.dmas.push(dma_shared.clone());
+            let map_mask = !((size * mirrors as usize - 1) as Word);
+            (map_mask, base_addr)
+        };
 
-        let mask = !((size - 1) as Word);
-        self.bus.attach_shared_device(&dma_shared, base_addr, mask);
+        let addr_mask = map_mask >> (mirrors as u32).trailing_zeros();
+
+        let (dev, handle) = device.into_handle();
+        self.bus
+            .attach_device_handle(dev, base_addr, map_mask, addr_mask);
+        handle
     }
 
-    pub fn attach_rom(&mut self, mut rom_data: Vec<Byte>, base_addr: Word) {
+    pub fn attach_dma<D: Device + DMAController + 'static>(
+        &mut self,
+        device: D,
+        base_addr: Word,
+        size: usize,
+    ) where
+        D: IntoDMAHandle<H>,
+    {
+        let (mask, base_addr) = if size == 0 {
+            (0x0, 0xFFFF)
+        } else {
+            assert!(size <= 0xFFFF + 1, "Size exceeds address space.");
+            assert!(
+                size.is_power_of_two(),
+                "Size must be a power of two for the device to have a valid mask."
+            );
+            assert!(
+                (base_addr as usize & (size - 1)) == 0,
+                "base address must be aligned to size"
+            );
+
+            let mask = !((size - 1) as Word);
+            (mask, base_addr)
+        };
+
+        let (handle, dma) = device.into_dma_handles();
+        if let Some(dma) = dma {
+            self.dmas.push(dma);
+        }
+        self.bus.attach_device_handle(handle, base_addr, mask, 1);
+    }
+
+    pub fn attach_rom(&mut self, mut rom_data: Vec<Byte>, base_addr: Word, mirrors: u8)
+    where
+        MemoryDevice: IntoHandle<H>,
+    {
         let size = rom_data.len().next_power_of_two();
         assert!(size <= (0xFFFF + 1), "ROM size exceeds address space.");
+
         rom_data.resize(size, 0xFF);
-
-        assert!(
-            (base_addr as usize & (size - 1)) == 0,
-            "base address must be aligned to size"
-        );
-
-        let mask = !((size - 1) as Word);
-        let rom = MemoryDevice::rom(rom_data);
-        self.bus.attach_device(rom, base_addr, mask);
+        self.attach_device(MemoryDevice::rom(rom_data), base_addr, size, mirrors);
     }
 
-    pub fn attach_ram(&mut self, base_addr: Word, size: usize) {
-        assert!(size.is_power_of_two(), "RAM size must be a power of two");
-        assert!(size <= (0xFFFF + 1), "RAM size exceeds address space");
-
-        let mask = !((size - 1) as Word);
-        let ram = MemoryDevice::ram(size);
-        self.bus.attach_device(ram, base_addr, mask);
+    pub fn attach_ram(&mut self, base_addr: Word, size: usize, mirrors: u8)
+    where
+        MemoryDevice: IntoHandle<H>,
+    {
+        self.attach_device(MemoryDevice::ram(size), base_addr, size, mirrors);
     }
 
     pub fn tick(&mut self) -> BusOp {
@@ -87,16 +150,23 @@ impl<V: Decoder + Quirks> GenericSystem<V> {
         self.cpu.phi2(&mut self.bus);
 
         if !self.bus.rdy {
-            self.dmas
-                .iter()
-                .filter(|dma| dma.borrow().wants_bus())
-                .for_each(|dma| dma.borrow_mut().dma_tick(&mut self.bus));
+            for dma in &mut self.dmas {
+                if dma.wants_bus() {
+                    dma.dma_tick(&mut self.bus);
+                }
+            }
         }
     }
 }
 
 #[cfg(feature = "driver")]
-impl<V: Decoder + Quirks> SystemInterface for GenericSystem<V> {
+impl<V, H> SystemInterface for GenericSystem<V, H>
+where
+    V: Decoder + Quirks,
+    H: DeviceHandle<dyn Device> + 'static,
+    EmulatorControl: IntoHandle<H>,
+{
+    type ControlHandle = <EmulatorControl as IntoHandle<H>>::ConcreteHandle;
     fn tick(&mut self) {
         match self.phase {
             Phase::Phi1 => {
@@ -126,8 +196,9 @@ impl<V: Decoder + Quirks> SystemInterface for GenericSystem<V> {
         }
     }
 
-    fn bus_as_mut(&mut self) -> &mut Bus {
-        &mut self.bus
+    fn attach_emulator_control(&mut self) -> Self::ControlHandle {
+        self.attach_device(EmulatorControl::new(), 0x0, 0x0, 1)
+            .expect("System should support an external concrete handle.")
     }
 
     fn snapshot(&self) -> SystemSnapshot {

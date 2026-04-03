@@ -1,9 +1,9 @@
+use crate::core::Byte;
 use crate::core::cpu::Status;
 use crate::core::microcode::Instruction;
 use crate::core::microcode::addressing_modes::IMMEDIATE;
 use crate::core::microcode::operations::ARR_RICOH;
 use crate::core::variants::nmos_6502_full::NMOS_6502_FULL;
-use crate::shared::Byte;
 
 use super::traits::{ALUOuput, VariantQuirks};
 use super::variant::*;

@@ -1,15 +1,40 @@
-use crate::{
-    core::bus::{Bus, Device},
-    shared::{Byte, Word},
+use crate::core::{
+    Byte, Word,
+    bus::{BusMaster, Device},
 };
 
 pub trait DMAController {
-    fn wants_bus(&self) -> bool;
-    fn dma_tick(&mut self, bus: &mut Bus);
+    fn wants_bus(&mut self) -> bool;
+    fn dma_tick(&mut self, bus: &mut dyn BusMaster);
+}
+
+pub struct MockDMA {}
+
+impl MockDMA {
+    pub fn new() -> Self {
+        MockDMA {}
+    }
+}
+
+impl Device for MockDMA {
+    fn read(&mut self, _addr: Word) -> Byte {
+        0xFF
+    }
+
+    fn write(&mut self, _addr: Word, _val: Byte) {}
+
+    fn tick(&mut self) {}
+}
+
+impl DMAController for MockDMA {
+    fn wants_bus(&mut self) -> bool {
+        true
+    }
+    fn dma_tick(&mut self, _bus: &mut dyn BusMaster) {}
 }
 
 pub struct GenericDMADevice<S> {
-    pub dma_cycle: fn(&mut S, &mut Bus),
+    pub dma_cycle: fn(&mut S, &mut dyn BusMaster),
     pub wants_bus: fn(&S) -> bool,
     pub on_write: fn(&mut GenericDMADevice<S>, addr: Word, val: Byte),
     pub on_read: fn(&mut GenericDMADevice<S>, addr: Word) -> Byte,
@@ -36,11 +61,11 @@ impl<S: 'static> Device for GenericDMADevice<S> {
 }
 
 impl<S: 'static> DMAController for GenericDMADevice<S> {
-    fn wants_bus(&self) -> bool {
+    fn wants_bus(&mut self) -> bool {
         self.active && ((self.wants_bus)(&self.state))
     }
 
-    fn dma_tick(&mut self, bus: &mut Bus) {
+    fn dma_tick(&mut self, bus: &mut dyn BusMaster) {
         (self.dma_cycle)(&mut self.state, bus);
     }
 }

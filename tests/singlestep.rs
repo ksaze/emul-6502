@@ -31,7 +31,7 @@ mod tests {
     use mos65x::core::bus::BusOp;
     use mos65x::core::cpu::test_utils::{CPUState, Status};
     use mos65x::core::variants::{Decoder, NMOS_6502, NMOS_6502_FULL, Quirks, RICOH_2A03};
-    use mos65x::generic_system::GenericSystem;
+    use mos65x::generic_system::BoxSystem;
 
     // ── Variant selection ────────────────────────────────────────────────────
 
@@ -122,36 +122,36 @@ mod tests {
         serde_json::from_str(&contents).expect("Failed to parse JSON")
     }
 
-    fn setup_emulator<V: Decoder + Quirks>(state: &CpuState, variant: V) -> GenericSystem<V> {
-        let mut emul = GenericSystem::new(variant);
-        emul.attach_ram(0x0000, 0x10000);
+    fn setup_emulator<V: Decoder + Quirks>(state: &CpuState, variant: V) -> BoxSystem<V> {
+        let mut system = BoxSystem::new(variant);
+        system.attach_ram(0x0000, 0x10000, 1);
 
         // Reset sequence
         for _ in 0..7 {
-            emul.tick();
+            system.tick();
         }
 
         // Set initial CPU state directly
-        emul.cpu.core.pc = state.pc;
-        emul.cpu.core.sp.value = state.s;
-        emul.cpu.core.a = state.a;
-        emul.cpu.core.x = state.x;
-        emul.cpu.core.y = state.y;
-        emul.cpu.core.flags = Status::from_bits_retain(state.p);
-        emul.cpu.core.state = CPUState::Fetch;
+        system.cpu.core.pc = state.pc;
+        system.cpu.core.sp.value = state.s;
+        system.cpu.core.a = state.a;
+        system.cpu.core.x = state.x;
+        system.cpu.core.y = state.y;
+        system.cpu.core.flags = Status::from_bits_retain(state.p);
+        system.cpu.core.state = CPUState::Fetch;
 
         for &(addr, value) in &state.ram {
-            emul.bus.write_raw(addr, value);
+            system.bus.write_raw(addr, value);
         }
 
-        emul
+        system
     }
 
     // ── Failure report ───────────────────────────────────────────────────────
 
     fn print_failure<V: Decoder + Quirks>(
         test: &TestCase,
-        emul: &mut GenericSystem<V>,
+        system: &mut BoxSystem<V>,
         actual_ops: &[BusOp],
         error: &str,
     ) {
@@ -162,7 +162,7 @@ mod tests {
         println!("❌ Error: {}\n", error);
 
         // CPU state — use snapshot so we never re-run with a different variant
-        let cpu = &emul.cpu.core;
+        let cpu = &system.cpu.core;
         let exp = &test.final_state;
 
         println!("┌─────────────────────────────────────────────────────────────┐");
@@ -211,7 +211,7 @@ mod tests {
         println!("│                       RAM STATE                             │");
         println!("├─────────────────────────────────────────────────────────────┤");
         for &(addr, expected_val) in &exp.ram {
-            let actual_val = emul.bus.read_raw(addr);
+            let actual_val = system.bus.read_raw(addr);
             cmp_reg(
                 &format!("[${:04X}]", addr),
                 format!("${:02X}", expected_val),
@@ -285,20 +285,20 @@ mod tests {
         Pass,
         Fail {
             error: String,
-            emul: GenericSystem<V>,
+            system: BoxSystem<V>,
             bus_ops: Vec<BusOp>,
         },
     }
 
     fn run_test_with<V: Decoder + Quirks>(test: &TestCase, variant: V) -> TestOutcome<V> {
-        let mut emul = setup_emulator(&test.initial, variant);
+        let mut system = setup_emulator(&test.initial, variant);
         let mut bus_ops = Vec::with_capacity(test.cycles.len());
 
         for _ in 0..test.cycles.len() {
-            bus_ops.push(emul.tick());
+            bus_ops.push(system.tick());
         }
 
-        let cpu = &emul.cpu.core;
+        let cpu = &system.cpu.core;
         let exp = &test.final_state;
 
         let error = 'check: {
@@ -341,7 +341,7 @@ mod tests {
             }
 
             for &(addr, expected_val) in &exp.ram {
-                let actual_val = emul.bus.read_raw(addr);
+                let actual_val = system.bus.read_raw(addr);
                 if actual_val != expected_val {
                     break 'check Some(format!(
                         "RAM[${:04X}] mismatch - expected ${:02X}, got ${:02X}",
@@ -389,7 +389,7 @@ mod tests {
             None => TestOutcome::Pass,
             Some(error) => TestOutcome::Fail {
                 error,
-                emul,
+                system,
                 bus_ops,
             },
         }
@@ -412,11 +412,11 @@ mod tests {
                 TestOutcome::Pass => println!("✅"),
                 TestOutcome::Fail {
                     error,
-                    mut emul,
+                    mut system,
                     bus_ops,
                 } => {
                     println!("❌\n");
-                    print_failure(test, &mut emul, &bus_ops, &error);
+                    print_failure(test, &mut system, &bus_ops, &error);
                     panic!("Test suite stopped at first failure");
                 }
             }

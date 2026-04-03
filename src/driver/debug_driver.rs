@@ -14,10 +14,8 @@ use ratatui::{
 
 use std::io;
 
-use crate::core::bus::{BusOp, Device};
+use crate::core::bus::{BusOp, DeviceHandle};
 use crate::core::cpu::CPUState;
-use crate::devices::EmulatorControl;
-use crate::shared::SharedDevice;
 
 use super::interface::{SystemInterface, SystemSnapshot};
 
@@ -106,7 +104,7 @@ impl PinState {
 
 pub struct DebugDriver<S: SystemInterface> {
     pub system: S,
-    ctrl: SharedDevice<EmulatorControl>,
+    ctrl: S::ControlHandle,
     history: Vec<CycleEntry>,
     mode: DriverMode,
     paused: bool,
@@ -122,8 +120,7 @@ impl<S: SystemInterface> DebugDriver<S> {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
-        let ctrl = EmulatorControl::new().into_shared();
-        system.bus_as_mut().attach_shared_device(&ctrl, 0xFFFF, 0x0);
+        let ctrl = system.attach_emulator_control();
 
         Self {
             system,
@@ -320,19 +317,27 @@ impl<S: SystemInterface> DebugDriver<S> {
 
     fn toggle_pin_res(&mut self) {
         self.pins.res = !self.pins.res;
-        self.ctrl.borrow_mut().res_line = !self.pins.res;
+        self.ctrl.with(|ctrl| {
+            ctrl.res_line = !self.pins.res;
+        });
     }
     fn toggle_pin_irq(&mut self) {
         self.pins.irq = !self.pins.irq;
-        self.ctrl.borrow_mut().irq_line = !self.pins.irq;
+        self.ctrl.with(|ctrl| {
+            ctrl.irq_line = !self.pins.irq;
+        });
     }
     fn toggle_pin_nmi(&mut self) {
         self.pins.nmi = !self.pins.nmi;
-        self.ctrl.borrow_mut().nmi_line = !self.pins.nmi;
+        self.ctrl.with(|ctrl| {
+            ctrl.nmi_line = !self.pins.nmi;
+        });
     }
     fn toggle_pin_rdy(&mut self) {
         self.pins.rdy = !self.pins.rdy;
-        self.ctrl.borrow_mut().rdy_line = !self.pins.rdy;
+        self.ctrl.with(|ctrl| {
+            ctrl.rdy_line = !self.pins.rdy;
+        });
     }
 
     // ── Draw ─────────────────────────────────────────────────────────────────

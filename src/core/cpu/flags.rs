@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 
-use crate::shared::Byte;
+use crate::core::Byte;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,8 +1,10 @@
-use mos65x::core::bus::{BusOp, Device};
+use core::panic;
+
+use mos65x::core::bus::BusOp;
 use mos65x::core::variants::{Decoder, NMOS_6502, Quirks};
 use mos65x::devices::EmulatorControl;
-use mos65x::generic_system::GenericSystem;
-use mos65x::shared::SharedDevice;
+use mos65x::generic_system::RcSystem;
+use mos65x::handles::*;
 
 fn bus_op_debug(op: BusOp) {
     match op {
@@ -22,40 +24,41 @@ fn setup_emulator<V>(
     variant: V,
     bin: &[u8],
     load_addr: u16,
-) -> (GenericSystem<V>, SharedDevice<EmulatorControl>)
+) -> (RcSystem<V>, SharedDevice<EmulatorControl>)
 where
     V: Decoder + Quirks,
 {
-    let mut emul = GenericSystem::new(variant);
-    emul.attach_ram(0x0000, 0x10000);
+    let mut system = RcSystem::new(variant);
+    system.attach_ram(0x0000, 0x10000, 1);
 
     for (i, b) in bin.iter().enumerate() {
-        emul.bus.write_raw(load_addr + i as u16, *b);
+        system.bus.write_raw(load_addr + i as u16, *b);
     }
 
-    emul.bus.write_raw(0xFFFC, (load_addr & 0xFF) as u8);
-    emul.bus.write_raw(0xFFFD, (load_addr >> 8) as u8);
+    system.bus.write_raw(0xFFFC, (load_addr & 0xFF) as u8);
+    system.bus.write_raw(0xFFFD, (load_addr >> 8) as u8);
 
     for _ in 0..7 {
-        emul.tick();
+        system.tick();
     }
 
-    let ctrl = EmulatorControl::new().into_shared();
-    emul.bus.attach_shared_device(&ctrl, 0xFFFF, 0x0);
-
-    (emul, ctrl)
+    if let Some(ctrl) = system.attach_device(EmulatorControl::new(), 0x0, 0x0, 1) {
+        (system, ctrl)
+    } else {
+        panic!("Attach device didn't return a handle")
+    }
 }
 
 fn run_cycles<V, Fa, Fb>(
-    emul: &mut GenericSystem<V>,
+    emul: &mut RcSystem<V>,
     ctrl: &SharedDevice<EmulatorControl>,
     cycles: usize,
     mut before_tick: Fa,
     mut after_tick: Fb,
 ) where
     V: Decoder + Quirks,
-    Fa: FnMut(usize, &mut GenericSystem<V>, &SharedDevice<EmulatorControl>),
-    Fb: FnMut(usize, &mut GenericSystem<V>, &SharedDevice<EmulatorControl>),
+    Fa: FnMut(usize, &mut RcSystem<V>, &SharedDevice<EmulatorControl>),
+    Fb: FnMut(usize, &mut RcSystem<V>, &SharedDevice<EmulatorControl>),
 {
     for cycle in 0..cycles {
         before_tick(cycle, emul, ctrl);

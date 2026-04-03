@@ -3,10 +3,10 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(dead_code, clippy::missing_docs_in_private_items)]
 
+use mos65x::core::Word;
 use mos65x::core::cpu::test_utils::CPUState;
 use mos65x::core::variants::NMOS_6502;
-use mos65x::generic_system::GenericSystem;
-use mos65x::shared::Word;
+use mos65x::generic_system::BoxSystem;
 
 use std::fs::read;
 
@@ -15,29 +15,29 @@ fn klaus_6502_functional_test() {
     let bin = read("tests/roms/6502_functional_test.bin")
         .expect("failed to load Klaus functional test binary");
 
-    let mut emul = GenericSystem::new(NMOS_6502);
+    let mut system = BoxSystem::new(NMOS_6502);
 
     // Full 64K RAM
-    emul.attach_ram(0x0000, 0x10000);
+    system.attach_ram(0x0000, 0x10000, 1);
 
     let load_addr: u16 = 0x0000;
 
     for (i, b) in bin.iter().enumerate() {
-        emul.bus.write_raw(load_addr + (i as u16), *b);
+        system.bus.write_raw(load_addr + (i as u16), *b);
     }
 
     // Reset vector → $0400
-    emul.bus.write_raw(0xFFFC, 0x00);
-    emul.bus.write_raw(0xFFFD, 0x04);
+    system.bus.write_raw(0xFFFC, 0x00);
+    system.bus.write_raw(0xFFFD, 0x04);
 
     let mut is_fetch_cycle = true;
     let mut prev_instr_pc = 0x400;
     let mut same_pc_counter = 0;
     for _ in 0..1_000_000_000 {
-        emul.tick();
+        system.tick();
 
         if is_fetch_cycle {
-            if emul.cpu.core.pc == prev_instr_pc {
+            if system.cpu.core.pc == prev_instr_pc {
                 same_pc_counter += 1;
 
                 if same_pc_counter > 100 {
@@ -45,20 +45,20 @@ fn klaus_6502_functional_test() {
                 }
             }
 
-            prev_instr_pc = emul.cpu.core.pc;
+            prev_instr_pc = system.cpu.core.pc;
             is_fetch_cycle = false;
         }
 
-        if emul.cpu.core.state == CPUState::Fetch {
+        if system.cpu.core.state == CPUState::Fetch {
             is_fetch_cycle = true;
         }
     }
 
     // PC is incremented after fetch. Change back to address of last instruction.
-    let final_pc = emul.cpu.core.pc - 1;
+    let final_pc = system.cpu.core.pc - 1;
     assert!(
         final_pc == 0x3469,
-        "GenericSystem didn't stop at success address. ❌ "
+        "BoxSystem didn't stop at success address. ❌ "
     );
 
     println!("Klaus Functional Test passed. ✅ ");
@@ -69,10 +69,10 @@ fn bruce_clark_decimal_mode_test() {
     let bin = read("tests/roms/6502_decimal_test.bin")
         .expect("failed to load Klaus functional test binary");
 
-    let mut emul = GenericSystem::new(NMOS_6502);
+    let mut emul = BoxSystem::new(NMOS_6502);
 
     // Full 64K RAM
-    emul.attach_ram(0x0000, 0x10000);
+    emul.attach_ram(0x0000, 0x10000, 1);
 
     let load_addr: u16 = 0x0000;
 

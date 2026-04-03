@@ -1,8 +1,9 @@
+use crate::core::{Byte, Word};
 use crate::core::{
-    bus::{Bus, BusOp},
+    bus::{BusOp, DeviceHandle},
     cpu::{CPUState, Signals, Status},
 };
-use crate::shared::{Byte, Word};
+use crate::devices::EmulatorControl;
 
 #[derive(Clone, Debug)]
 pub struct SystemSnapshot {
@@ -23,8 +24,10 @@ pub struct SystemSnapshot {
 }
 
 pub trait SystemInterface {
+    type ControlHandle: DeviceHandle<EmulatorControl>;
+
     fn tick(&mut self);
     fn half_tick(&mut self);
-    fn bus_as_mut(&mut self) -> &mut Bus;
+    fn attach_emulator_control(&mut self) -> Self::ControlHandle;
     fn snapshot(&self) -> SystemSnapshot;
 }

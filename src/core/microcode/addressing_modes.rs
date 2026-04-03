@@ -1,5 +1,5 @@
+use crate::core::Word;
 use crate::core::variants::ALUOuput;
-use crate::shared::Word;
 
 use super::instruction::AddressingMode;
 use super::micro_op::*;
