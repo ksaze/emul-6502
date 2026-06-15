@@ -161,6 +161,22 @@ impl<H: DeviceHandle<dyn Device>> Bus<H> {
 
         self.last_op = BusOp::Internal; // reset operation for next cycle
     }
+
+    pub fn poll_interrupts(&mut self) {
+        self.irq = true;
+        self.nmi = true;
+        self.res = true;
+        self.rdy = true;
+
+        for map in self.mappings.iter_mut() {
+            map.device.with(|device| {
+                self.irq &= device.irq();
+                self.nmi &= device.nmi();
+                self.res &= device.res();
+                self.rdy &= device.rdy();
+            })
+        }
+    }
 }
 
 // Interface exposed to Bus Masters (CPU, DMA)

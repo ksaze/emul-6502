@@ -33,43 +33,6 @@ impl DMAController for MockDMA {
     fn dma_tick(&mut self, _bus: &mut dyn BusMaster) {}
 }
 
-pub struct GenericDMADevice<S> {
-    pub dma_cycle: fn(&mut S, &mut dyn BusMaster),
-    pub wants_bus: fn(&S) -> bool,
-    pub on_write: fn(&mut GenericDMADevice<S>, addr: Word, val: Byte),
-    pub on_read: fn(&mut GenericDMADevice<S>, addr: Word) -> Byte,
-
-    pub active: bool,
-    pub warmup: u8,
-    pub state: S,
-}
-
-impl<S: 'static> Device for GenericDMADevice<S> {
-    fn read(&mut self, addr: Word) -> Byte {
-        (self.on_read)(self, addr)
-    }
-
-    fn write(&mut self, addr: Word, val: Byte) {
-        (self.on_write)(self, addr, val);
-    }
-
-    fn rdy(&self) -> bool {
-        (self.wants_bus)(&self.state)
-    }
-
-    fn tick(&mut self) {}
-}
-
-impl<S: 'static> DMAController for GenericDMADevice<S> {
-    fn wants_bus(&mut self) -> bool {
-        self.active && ((self.wants_bus)(&self.state))
-    }
-
-    fn dma_tick(&mut self, bus: &mut dyn BusMaster) {
-        (self.dma_cycle)(&mut self.state, bus);
-    }
-}
-
 pub struct EmulatorControl {
     pub nmi_line: bool,
     pub irq_line: bool,
@@ -117,7 +80,7 @@ pub struct MemoryDevice {
 }
 
 impl MemoryDevice {
-    pub fn new(data: Box<[Byte]>, readonly: bool) -> Self {
+    fn new(data: Box<[Byte]>, readonly: bool) -> Self {
         Self { data, readonly }
     }
 

@@ -1,6 +1,4 @@
+#![warn(clippy::all, clippy::pedantic)]
+#![allow(dead_code, clippy::missing_docs_in_private_items)]
+
 pub mod core;
-pub mod devices;
-#[cfg(feature = "driver")]
-pub mod driver;
-pub mod generic_system;
-pub mod handles;

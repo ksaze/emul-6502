@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "mos65x"
-version = "0.1.0"
+version = "0.1.0-beta"
 dependencies = [
  "bitflags 2.11.0",
  "crossterm",
